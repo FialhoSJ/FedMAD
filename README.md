@@ -8,7 +8,7 @@ Defesa contra ataques de envenenamento em Federated Learning usando arquitetura 
 
 ## Status
 
-Em desenvolvimento. Código baseado no [PFLlib](https://github.com/TsingZ0/PFLlib).
+Em desenvolvimento. Código baseado no [PFLlib](https://github.com/VeigarGit/PFLlibMonza.git).
 
 ## O que foi feito até agora
 

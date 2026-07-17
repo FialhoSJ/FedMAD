@@ -1,14 +1,10 @@
-# FedMAD
-FedMAD It is a defense framework against poisoning (poisoning/backdoor) attacks in Federated Learning (FL), based on a collaborative multi-agent architecture with self-supervised learning (SSL).
-
-
 # FedMAD — Federated Multi-Agent Defense (em desenvolvimento)
 
 Defesa contra ataques de envenenamento em Federated Learning usando arquitetura multi-agente e aprendizado auto-supervisionado.
 
 ## Status
 
-Em desenvolvimento. Código baseado no [PFLlib](https://github.com/VeigarGit/PFLlibMonza.git).
+Em desenvolvimento. Código baseado no [PFLlib](https://github.com/TsingZ0/PFLlib).
 
 ## O que foi feito até agora
 
@@ -50,10 +46,11 @@ Em desenvolvimento. Código baseado no [PFLlib](https://github.com/VeigarGit/PFL
 ```bash
 cd system
 python main.py -data Cifar10 -m CNN -algo FedAvg -nc 20 -gr 200
-Referências
+```
+
+## Referências
+
 - EmInspector — detecção por embedding (arXiv)
 - FedREDefense — detecção por erro de reconstrução (ICML 2024)
 - SimCLR — aprendizado contrastivo (NeurIPS 2020)
 - PFLlib — biblioteca FL (JMLR 2025)
-
----

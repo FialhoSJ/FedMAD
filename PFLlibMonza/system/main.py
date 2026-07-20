@@ -49,6 +49,7 @@ from flcore.servers.serverda import PFL_DA
 from flcore.servers.serverlc import FedLC
 from flcore.servers.serveras import FedAS
 from flcore.servers.servercross import FedCross
+from flcore.servers.servermad import ServerMAD
 
 from flcore.trainmodel.models import *
 
@@ -368,6 +369,9 @@ def run(args):
         elif args.algorithm == "FedCross":
             server = FedCross(args, i)
 
+        elif args.algorithm == "MAD":
+            server = ServerMAD(args, i)
+
         else:
             raise NotImplementedError
 
@@ -510,6 +514,9 @@ if __name__ == "__main__":
     parser.add_argument('-ria', '--round_init_atk', type = int, default=0)
     parser.add_argument('-rfake', '--rate_client_fake', type = int, default=1) # de 0 a 1
     parser.add_argument('-cc', '--cluster_comparation', type = int, default=0) # 0 score com modelo global, 1 score com comparação entre clientes, 2 comparação entre clientes e remove todo o cluster , 3 comparação entre clientes com pontuação, 4 entropia do modelo 5 sem nada
+    parser.add_argument('-ssl_ep', '--ssl_epochs', type=int, default=0)
+    parser.add_argument('-ssl_pd', '--ssl_proj_dim', type=int, default=128)
+    parser.add_argument('-v', '--verbose', type=bool, default=False)
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id

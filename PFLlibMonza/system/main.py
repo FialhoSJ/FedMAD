@@ -517,6 +517,9 @@ if __name__ == "__main__":
     parser.add_argument('-ssl_ep', '--ssl_epochs', type=int, default=0)
     parser.add_argument('-ssl_pd', '--ssl_proj_dim', type=int, default=128)
     parser.add_argument('-v', '--verbose', type=bool, default=False)
+    parser.add_argument('-fedre_latent', '--fedre_latent', type=int, default=16)
+    parser.add_argument('-fedre_ep', '--fedre_epochs', type=int, default=10)
+    parser.add_argument('-fedre_lr', '--fedre_lr', type=float, default=0.01)
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id

@@ -12,7 +12,6 @@ class AgentBase(ABC):
     def analyze(self, client_models, global_model, metadata):
         ...
     
-    @abstractmethod
     def get_name(self):
         return self.name
     

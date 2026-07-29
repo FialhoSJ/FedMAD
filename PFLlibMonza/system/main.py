@@ -521,6 +521,15 @@ if __name__ == "__main__":
     parser.add_argument('-fedre_ep', '--fedre_epochs', type=int, default=10)
     parser.add_argument('-fedre_lr', '--fedre_lr', type=float, default=0.01)
     parser.add_argument('-bhv_lb', '--bhv_lookback', type=int, default=5)
+    # SLM Aggregator args (referência: SLMFORGE, Sheikhi 2025)
+    parser.add_argument('-slm_e', '--slm_enabled', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable SLM aggregator (True) or fallback arithmetic mean (False)")
+    parser.add_argument('-slm_m', '--slm_model', type=str, default='microsoft/Phi-3-mini-4k-instruct',
+                        help="SLM model name/path for aggregator reasoning")
+    parser.add_argument('-slm_mt', '--slm_max_tokens', type=int, default=2048,
+                        help="Max tokens in SLM response per client batch")
+    parser.add_argument('-slm_n', '--slm_every_n', type=int, default=1,
+                        help="Run SLM every N rounds (1=each, 5=every 5 rounds)")
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id

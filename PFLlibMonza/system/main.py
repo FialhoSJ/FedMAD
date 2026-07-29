@@ -521,6 +521,15 @@ if __name__ == "__main__":
     parser.add_argument('-fedre_ep', '--fedre_epochs', type=int, default=10)
     parser.add_argument('-fedre_lr', '--fedre_lr', type=float, default=0.01)
     parser.add_argument('-bhv_lb', '--bhv_lookback', type=int, default=5)
+    # Toggle individual agents (True = ativo, False = desativado)
+    parser.add_argument('-agent_em', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable EmInspector agent")
+    parser.add_argument('-agent_fedre', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable FedREDefense agent")
+    parser.add_argument('-agent_bhv', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable Behavior agent")
+    parser.add_argument('-agent_flg', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable FedLLMGuard agent")
     # SLM Aggregator args (referência: SLMFORGE, Sheikhi 2025)
     parser.add_argument('-slm_e', '--slm_enabled', type=lambda x: x.lower() == 'true', default=True,
                         help="Enable SLM aggregator (True) or fallback arithmetic mean (False)")

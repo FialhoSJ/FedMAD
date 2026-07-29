@@ -2,13 +2,13 @@
 SLMAggregatorAgent - Agregador baseado em SLM para deteccao de clientes maliciosos.
 
 Substitui a media aritmetica (AggregatorAgent original) por raciocinio
-com Small Language Model que analisa os scores dos 3 detectores.
+com Small Language Model que analisa os scores dos 4 detectores.
 
 Referencia: SLMFORGE (Sheikhi, IEEE BigData 2025) - SLMs em FL para cybersecurity.
 Modelo recomendado: Phi-3-mini (3.8B) - bom equilibrio entre raciocinio e custo.
 
 Fluxo:
-1. Recebe scores de 3 agentes (EmInspector, FedREDefense, Behavior)
+1. Recebe scores de 4 agentes (EmInspector, FedREDefense, Behavior, FedLLMGuard)
 2. Converte para prompt estruturado com contexto do round + historico
 3. SLM gera JSON: client_id, score (0-1), verdict, justificacao textual
 4. Fallback para media aritmetica se SLM falhar ou modelo nao carregado
@@ -107,29 +107,33 @@ class SLMAggregatorAgent:
 
         O prompt inclui:
         - Sistema curto + exemplo few-shot do JSON esperado
-        - Scores dos 3 detectores para cada cliente
+        - Scores dos detectores ativos para cada cliente
         """
         round_n = metadata.get("round", 0)
         n_clients = len(client_scores)
         quarantined = metadata.get("quarantined_ids", [])
+        agent_names = metadata.get("agent_names", ["EmInspector", "FedREDefense", "Behavior", "FedLLMGuard"])
+        n_detectors = len(agent_names)
 
         # Few-shot: mostra 1 exemplo para o modelo aprender o formato JSON
-        example_json = '''
+        example_json = f'''
 Example output:
-[{"client_id": 0, "score": 0.1, "verdict": "benign", "reason": "low scores across all detectors"},
- {"client_id": 1, "score": 0.9, "verdict": "malicious", "reason": "high scores on all 3 detectors"}]
+[{{"client_id": 0, "score": 0.1, "verdict": "benign", "reason": "low scores across all {n_detectors} detectors"}},
+ {{"client_id": 1, "score": 0.9, "verdict": "malicious", "reason": "high scores on all {n_detectors} detectors"}}]
 '''
 
         system_msg = (
             "Analyze anomaly detection scores for FL clients.\n"
-            "3 detectors: EmInspector, FedREDefense, Behavior (0=benign, 1=malicious).\n"
+            f"{n_detectors} detectors: {', '.join(agent_names)} (0=benign, 1=malicious).\n"
             "Output ONLY the JSON array. No preamble, no explanations, no markdown.\n"
             + example_json
         )
 
+        abbrev = {name: name[:2].upper() for name in agent_names}
         user_msg = f"Round {round_n} | {n_clients} clients | {quarantined} quarantined\n"
         for cid, scores in client_scores.items():
-            user_msg += f"Client {cid}: Em={scores[0]:.4f}, FR={scores[1]:.4f}, Bh={scores[2]:.4f}\n"
+            parts = [f"{abbrev.get(agent_names[i], f'D{i}')}={s:.4f}" for i, s in enumerate(scores)]
+            user_msg += f"Client {cid}: {', '.join(parts)}\n"
 
         messages = [
             {"role": "system", "content": system_msg},

@@ -25,15 +25,26 @@ class ServerMAD(Server):
         from flcore.madsystem.agents.agent_emInspector import AgentEmInspector
         from flcore.madsystem.agents.agent_fedREDefense import AgentFedREDefense
         from flcore.madsystem.agents.agent_behavior import AgentBehavior
+        from flcore.madsystem.agents.agent_fedllmguard import AgentFedLLMGuard
         from flcore.madsystem.agents.agent_slm_aggregator import SLMAggregatorAgent
         from flcore.madsystem.aggregator_agent import AggregatorAgent
 
-        # 3 detectores especializados: cada um produz scores de anomalia
-        self.agents = [
-            AgentEmInspector(args, encoder=self.encoder),  # similaridade de cosseno nos embeddings
-            AgentFedREDefense(args),                         # reconstrucao com autoencoder
-            AgentBehavior(args),                              # historico temporal de cada cliente
-        ]
+        # Detectores especializados (cada um produz scores de anomalia)
+        self.agents = []
+        self.agent_names = []
+        if getattr(args, 'agent_em', True):
+            self.agents.append(AgentEmInspector(args, encoder=self.encoder))
+            self.agent_names.append("EmInspector")
+        if getattr(args, 'agent_fedre', True):
+            self.agents.append(AgentFedREDefense(args))
+            self.agent_names.append("FedREDefense")
+        if getattr(args, 'agent_bhv', True):
+            self.agents.append(AgentBehavior(args))
+            self.agent_names.append("Behavior")
+        if getattr(args, 'agent_flg', True):
+            self.agents.append(AgentFedLLMGuard(args))
+            self.agent_names.append("FedLLMGuard")
+        print(f"[MAD] Agentes ativos ({len(self.agents)}): {', '.join(self.agent_names)}")
         # Agregador: substitui a media aritmetica por raciocinio com SLM
         # (Phi-3-mini ou TinyLlama) que analisa os scores + metadados
         if getattr(args, 'slm_enabled', True):
@@ -109,6 +120,7 @@ class ServerMAD(Server):
                     "history": self.history,
                     "encoder": self.encoder,
                     "quarantined_ids": quarantined_ids,
+                    "agent_names": self.agent_names,
                 }
 
                 # 5. Cada agente especializado produz scores de anomalia

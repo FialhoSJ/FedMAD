@@ -1,5 +1,7 @@
+import os
 import time
 import copy
+import json
 import torch
 import torch.nn as nn
 import numpy as np
@@ -20,6 +22,9 @@ class ServerMAD(Server):
         # Codificador partilhado (extrai representacoes intermédias das CNNs)
         self.encoder = self._build_encoder(args)
         self.history = []  # historico de modelos enviados (para detecao temporal)
+
+        # --- Tracking para graficos ---
+        self.agent_round_log = []       # lista de dicts por round
 
         # Importacoes tardias para evitar dependencias circulares
         from flcore.madsystem.agents.agent_emInspector import AgentEmInspector
@@ -125,10 +130,12 @@ class ServerMAD(Server):
 
                 # 5. Cada agente especializado produz scores de anomalia
                 client_scores = {cid: [] for cid in self.uploaded_ids}
+                agent_scores_by_name = {}
                 for agent in self.agents:
                     scores = agent.analyze(
                         self.uploaded_models, self.global_model, metadata
                     )
+                    agent_scores_by_name[agent.name] = scores
                     for cid, sc in zip(self.uploaded_ids, scores):
                         client_scores[cid].append(sc)
 
@@ -136,10 +143,12 @@ class ServerMAD(Server):
                 final_scores = self.aggregator.aggregate(client_scores, metadata=metadata)
 
                 # 7. Remove modelos de clientes com score > 0.6 (threshold)
+                removed_ids = []
                 for idx in range(len(self.uploaded_ids) - 1, -1, -1):
                     cid = self.uploaded_ids[idx]
                     if final_scores.get(cid, 0) > 0.6:
                         print(f"Removing client {cid} (score={final_scores[cid]:.4f})")
+                        removed_ids.append(cid)
                         self.set_client_quarantine(cid)
                         del self.uploaded_models[idx]
                         del self.ids[idx]
@@ -150,6 +159,20 @@ class ServerMAD(Server):
                 self.uploaded_weights = [
                     w / sum(self.uploaded_weights) for w in self.uploaded_weights
                 ]
+
+                # --- Log dos agentes para grafico ---
+                log_entry = {
+                    "round": i,
+                    "client_ids_uploaded": list(self.uploaded_ids),
+                    "agent_scores": {
+                        name: dict(zip(self.uploaded_ids, scores))
+                        for name, scores in agent_scores_by_name.items()
+                    },
+                    "final_scores": dict(final_scores),
+                    "removed_ids": removed_ids,
+                    "quarantined_ids": quarantined_ids,
+                }
+                self.agent_round_log.append(log_entry)
 
             # 8. Agregacao dos modelos (FedAvg)
             self.aggregate_parameters()
@@ -173,4 +196,60 @@ class ServerMAD(Server):
         print("\nBest accuracy:", max(self.rs_test_acc))
         print("Average time cost per round:", sum(self.Budget[1:]) / len(self.Budget[1:]))
         self.save_results()
+        self.save_agent_results()
         self.save_global_model()
+
+    def save_agent_results(self):
+        result_path = "../results/"
+        if not os.path.exists(result_path):
+            os.makedirs(result_path)
+
+        algo = f"{self.dataset}_{self.algorithm}_{self.cc}_{int(self.rate_client_fake*100)}_{self.n_client_malicious}"
+        algo = f"{algo}_{self.goal}_{self.times}"
+        file_path = result_path + f"{algo}_agentlog.json"
+
+        # Ground truth: mascara binaria dos indices maliciosos
+        malicious_mask = [1 if i in self.index_malicious else 0 for i in range(self.num_clients)]
+
+        # Converte agent_round_log para serializavel (JSON-safe)
+        log_serializable = []
+        for entry in self.agent_round_log:
+            agent_scores_clean = {}
+            for name, scores_dict in entry["agent_scores"].items():
+                agent_scores_clean[name] = {str(k): float(v) for k, v in scores_dict.items()}
+            entry_clean = {
+                "round": int(entry["round"]),
+                "client_ids_uploaded": [int(c) for c in entry["client_ids_uploaded"]],
+                "agent_scores": agent_scores_clean,
+                "final_scores": {str(k): float(v) for k, v in entry["final_scores"].items()},
+                "removed_ids": [int(c) for c in entry["removed_ids"]],
+                "quarantined_ids": [int(c) for c in entry["quarantined_ids"]],
+            }
+            log_serializable.append(entry_clean)
+
+        class NumpyEncoder(json.JSONEncoder):
+            def default(self, obj):
+                if isinstance(obj, (np.integer,)):
+                    return int(obj)
+                elif isinstance(obj, (np.floating,)):
+                    return float(obj)
+                elif isinstance(obj, (np.ndarray,)):
+                    return obj.tolist()
+                return super().default(obj)
+
+        data = {
+            "num_clients": int(self.num_clients),
+            "n_client_malicious": int(self.n_client_malicious),
+            "global_rounds": int(self.global_rounds),
+            "agent_names": self.agent_names,
+            "malicious_indices": [int(i) for i in self.index_malicious],
+            "malicious_mask": malicious_mask,
+            "agent_round_log": log_serializable,
+            "rs_test_acc": [float(x) for x in self.rs_test_acc],
+            "rs_test_auc": [float(x) for x in self.rs_test_auc],
+            "budget": [float(x) for x in self.Budget],
+        }
+
+        with open(file_path, "w") as f:
+            json.dump(data, f, indent=2, cls=NumpyEncoder)
+        print(f"[MAD] Agent results saved to {file_path}")

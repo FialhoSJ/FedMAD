@@ -30,15 +30,16 @@ class AgentFedREDefense(AgentBase):
         self.lr = getattr(args, 'fedre_lr', 0.01)
         self.autoencoder = None
 
-    @staticmethod
-    def _extract_features(model_dict):
+    def _extract_features(self, model_dict):
         feats = []
         for v in model_dict.values():
-            p = v.flatten()
+            p = v.flatten().to(self.device)
             feats.extend([p.mean().item(), p.std().item(), p.norm().item()])
-        return torch.tensor(feats)
+        return torch.tensor(feats, device=self.device)
 
     def analyze(self, client_models, global_model, metadata):
+        client_models = [m.to(self.device) for m in client_models]
+
         features = torch.stack([
             self._extract_features(m.state_dict()) for m in client_models
         ])
@@ -47,9 +48,8 @@ class AgentFedREDefense(AgentBase):
         if n < 3:
             return [0.5] * n
 
-        device = features.device
         if self.autoencoder is None or self.autoencoder.encoder[0].in_features != d:
-            self.autoencoder = _Autoencoder(d, self.latent_dim).to(device)
+            self.autoencoder = _Autoencoder(d, self.latent_dim).to(self.device)
 
         ae = self.autoencoder
         opt = torch.optim.Adam(ae.parameters(), lr=self.lr)

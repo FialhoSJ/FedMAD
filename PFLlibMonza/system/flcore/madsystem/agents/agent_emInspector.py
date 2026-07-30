@@ -12,6 +12,8 @@ class AgentEmInspector(AgentBase):
         if n < 2:
             return [0.5] * n
 
+        client_models = [m.to(self.device) for m in client_models]
+
         flat = torch.stack([
             self.flatten_params(m.state_dict()) for m in client_models
         ])

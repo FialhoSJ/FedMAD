@@ -15,6 +15,9 @@ class AgentBehavior(AgentBase):
         if n < 1:
             return [0.5] * n
 
+        client_models = [m.to(self.device) for m in client_models]
+        global_model = global_model.to(self.device)
+
         scores = []
         for i, cid in enumerate(client_ids):
             current_sd = client_models[i].state_dict()
@@ -30,7 +33,7 @@ class AgentBehavior(AgentBase):
             if cid not in self.client_history:
                 self.client_history[cid] = []
             self.client_history[cid].append(
-                {k: v.detach().cpu() for k, v in current_sd.items()}
+                {k: v.detach().to(self.device) for k, v in current_sd.items()}
             )
             if len(self.client_history[cid]) > self.lookback:
                 self.client_history[cid].pop(0)

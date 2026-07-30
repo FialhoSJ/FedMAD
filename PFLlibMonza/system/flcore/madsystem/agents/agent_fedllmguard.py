@@ -202,7 +202,7 @@ class AgentFedLLMGuard(AgentBase):
         """
         p = param_tensor.flatten().float()
         if p.numel() < 2:
-            return torch.zeros(8)
+            return torch.zeros(8, device=self.device)
 
         mean = p.mean()
         std = p.std()
@@ -212,7 +212,7 @@ class AgentFedLLMGuard(AgentBase):
 
         # Skewness (terceiro momento padronizado)
         skew = ((p - mean).pow(3).mean() /
-                (std.pow(3) + 1e-8)) if std > 1e-8 else torch.tensor(0.0)
+                (std.pow(3) + 1e-8)) if std > 1e-8 else torch.tensor(0.0, device=self.device)
 
         # Esparsidade: fracao de valores proximos de zero
         sparsity = (p.abs() < 1e-4).float().mean()
@@ -242,7 +242,7 @@ class AgentFedLLMGuard(AgentBase):
             tokens.append(sig)
 
         if len(tokens) == 0:
-            return torch.zeros((1, 8))
+            return torch.zeros((1, 8), device=self.device)
 
         seq = torch.stack(tokens)
 
@@ -252,7 +252,7 @@ class AgentFedLLMGuard(AgentBase):
             indices = torch.linspace(0, seq.size(0) - 1, max_len).long()
             return seq[indices]
         elif seq.size(0) < max_len:
-            pad = torch.zeros(max_len - seq.size(0), 8)
+            pad = torch.zeros(max_len - seq.size(0), 8, device=self.device)
             return torch.cat([seq, pad], dim=0)
         return seq
 
@@ -375,6 +375,10 @@ class AgentFedLLMGuard(AgentBase):
         n = len(client_models)
         if n < 2:
             return [0.5] * n
+
+        # Garantir que todos os modelos estao no device correto (GPU)
+        client_models = [m.to(self.device) for m in client_models]
+        global_model = global_model.to(self.device)
 
         # 1. Codificar todos os modelos em embeddings
         client_embs = []

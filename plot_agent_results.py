@@ -2,6 +2,9 @@ import json
 import os
 import sys
 import numpy as np
+
+import matplotlib
+matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
 RESULTS_DIR = "PFLlibMonza/results"
@@ -10,6 +13,11 @@ RESULTS_DIR = "PFLlibMonza/results"
 def load_agent_log(filepath):
     with open(filepath) as f:
         return json.load(f)
+
+
+def _nice_ticks(lo, hi, max_labels=12):
+    step = max(1, -(-(hi - lo) // max_labels))
+    return list(range(lo, hi, step))
 
 
 def plot_all(data, save_path=None):
@@ -21,7 +29,7 @@ def plot_all(data, save_path=None):
     malicious_mask = np.array(data["malicious_mask"])
     malicious_indices = data["malicious_indices"]
 
-    fig, axes = plt.subplots(n_agents + 1, 1, figsize=(14, 3 * (n_agents + 1)),
+    fig, axes = plt.subplots(n_agents + 1, 1, figsize=(14, 2.6 * (n_agents + 1)),
                              sharex=True)
 
     # ---- Matriz de scores por agente ----
@@ -38,7 +46,7 @@ def plot_all(data, save_path=None):
 
         im = ax.imshow(score_matrix.T, aspect="auto", cmap="Reds",
                        vmin=0, vmax=1, interpolation="nearest")
-        ax.set_yticks(range(n_clients))
+        ax.set_yticks(_nice_ticks(0, n_clients))
         ax.set_ylabel("Client")
         ax.set_title(f"{agent_name} - Anomaly Scores")
         cb = plt.colorbar(im, ax=ax, fraction=0.02, pad=0.04)
@@ -60,7 +68,8 @@ def plot_all(data, save_path=None):
 
     im = ax.imshow(final_matrix.T, aspect="auto", cmap="Reds",
                    vmin=0, vmax=1, interpolation="nearest")
-    ax.set_yticks(range(n_clients))
+    ax.set_yticks(_nice_ticks(0, n_clients))
+    ax.set_xticks(_nice_ticks(1, n_rounds + 1))
     ax.set_ylabel("Client")
     ax.set_xlabel("Round")
     ax.set_title("Final Aggregated Score")
@@ -77,10 +86,14 @@ def plot_all(data, save_path=None):
 
     fig.suptitle(f"MAD Detection - {data['n_client_malicious']}/{data['num_clients']} malicious, {data['global_rounds']} rounds",
                  fontsize=14)
-    plt.tight_layout(rect=[0.04, 0, 1, 0.97])
+    try:
+        plt.tight_layout(rect=[0.04, 0, 1, 0.97])
+    except Exception:
+        fig.subplots_adjust(hspace=0.4)
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.savefig(save_path, dpi=130)
+        plt.close(fig)
         print(f"Saved: {save_path}")
     else:
         plt.show()
@@ -90,12 +103,25 @@ def plot_scores_over_rounds(data, save_path=None):
     agent_names = data["agent_names"]
     n_clients = data["num_clients"]
     rounds = [e["round"] for e in data["agent_round_log"]]
+    if not rounds:
+        print("No rounds logged; nothing to plot.")
+        return
 
-    fig, axes = plt.subplots(n_clients, 1, figsize=(12, 2.5 * n_clients),
+    # Mostra os maliciosos sempre + os benignos de maior score médio (máx ~12)
+    malicious = set(data["malicious_indices"])
+    mean_final = {}
+    for cid in range(n_clients):
+        vals = [e["final_scores"].get(str(cid), np.nan) for e in data["agent_round_log"]]
+        mean_final[cid] = float(np.nanmean(vals)) if vals else 0.0
+    benign = sorted([c for c in range(n_clients) if c not in malicious],
+                    key=lambda c: -mean_final[c])
+    selected = sorted(malicious) + benign[:max(0, 12 - len(malicious))]
+
+    fig, axes = plt.subplots(len(selected), 1, figsize=(12, 2.0 * len(selected)),
                              sharex=True, squeeze=False)
 
-    for cid in range(n_clients):
-        ax = axes[cid, 0]
+    for row, cid in enumerate(selected):
+        ax = axes[row, 0]
         cid_str = str(cid)
 
         rounds_plot = []
@@ -123,12 +149,18 @@ def plot_scores_over_rounds(data, save_path=None):
         ax.legend(fontsize=7, ncol=2)
         ax.grid(True, alpha=0.3)
 
+    ax.set_xticks(_nice_ticks(1, len(rounds) + 1))
     ax.set_xlabel("Round")
-    fig.suptitle("Anomaly Scores per Client per Round", fontsize=14)
-    plt.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.suptitle(f"Anomaly Scores per Client per Round (exibindo {len(selected)}/{n_clients} clientes)",
+                 fontsize=14)
+    try:
+        plt.tight_layout(rect=[0, 0, 1, 0.97])
+    except Exception:
+        fig.subplots_adjust(hspace=0.4)
 
     if save_path:
-        plt.savefig(save_path, dpi=150, bbox_inches="tight")
+        plt.savefig(save_path, dpi=130)
+        plt.close(fig)
         print(f"Saved: {save_path}")
     else:
         plt.show()

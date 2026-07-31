@@ -33,7 +33,7 @@ class AgentBehavior(AgentBase):
             if cid not in self.client_history:
                 self.client_history[cid] = []
             self.client_history[cid].append(
-                {k: v.detach().to(self.device) for k, v in current_sd.items()}
+                {k: v.detach().cpu() for k, v in current_sd.items()}
             )
             if len(self.client_history[cid]) > self.lookback:
                 self.client_history[cid].pop(0)

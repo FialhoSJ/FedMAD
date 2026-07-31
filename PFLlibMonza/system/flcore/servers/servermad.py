@@ -1,6 +1,5 @@
 import os
 import time
-import copy
 import json
 import torch
 import torch.nn as nn
@@ -187,10 +186,17 @@ class ServerMAD(Server):
             ):
                 break
 
-            # Guarda historico de modelos para detecao temporal
+            # Guarda historico RECENTE de modelos para detecao temporal
+            # (limitado ao lookback e mantido em CPU para nao estourar a VRAM)
+            max_history = getattr(self.args, 'bhv_lookback', 5)
             self.history.append(
-                [copy.deepcopy(m.state_dict()) for m in self.uploaded_models]
+                [
+                    {k: v.detach().cpu() for k, v in m.state_dict().items()}
+                    for m in self.uploaded_models
+                ]
             )
+            if len(self.history) > max_history:
+                self.history.pop(0)
 
         # Resultados finais
         print("\nBest accuracy:", max(self.rs_test_acc))

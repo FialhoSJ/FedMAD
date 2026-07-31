@@ -56,6 +56,8 @@ class Server(object):
         self.rs_train_loss = []
         self.rs_train_time = []
         self.Budget = []
+        self.rs_asr = []      # ataque bem sucedido (retencao do label flip)
+        self.rs_ba = []       # acuracia sobre clientes benignos
 
         self.times = times
         self.eval_gap = args.eval_gap
@@ -383,7 +385,7 @@ class Server(object):
         return os.path.exists(model_path)
         
     def save_results(self):
-        algo = self.dataset + "_" + self.algorithm + "_" + str(self.cc) + "_" + str((self.rate_client_fake*100)) + "_" + str(self.n_client_malicious)
+        algo = self.dataset + "_" + self.algorithm + "_" + str(self.cc) + "_" + str((self.rate_client_fake*100)) + "_" + str(self.n_client_malicious) + "_" + str(self.args.atack)
         result_path = "../results/"
         if not os.path.exists(result_path):
             os.makedirs(result_path)
@@ -398,6 +400,10 @@ class Server(object):
                 hf.create_dataset('rs_test_auc', data=self.rs_test_auc)
                 hf.create_dataset('rs_train_loss', data=self.rs_train_loss)
                 hf.create_dataset('rs_train_time', data=self.Budget)
+                if (len(self.rs_asr)):
+                    hf.create_dataset('rs_asr', data=self.rs_asr)
+                if (len(self.rs_ba)):
+                    hf.create_dataset('rs_ba', data=self.rs_ba)
 
     def save_item(self, item, item_name):
         if not os.path.exists(self.save_folder_name):
@@ -461,12 +467,61 @@ class Server(object):
         else:
             loss.append(train_loss)
 
+        asr, ba = self.evaluate_malicious()
+        if asr is not None and ba is not None:
+            self.rs_asr.append(asr)
+            self.rs_ba.append(ba)
+
         print("Averaged Train Loss: {:.4f}".format(train_loss))
         print("Averaged Test Accuracy: {:.4f}".format(test_acc))
         print("Averaged Test AUC: {:.4f}".format(test_auc))
+        if asr is not None:
+            print("Averaged Test ASR: {:.4f}".format(asr))
+            print("Benign Accuracy (BA): {:.4f}".format(ba))
         # self.print_(test_acc, train_acc, train_loss)
         print("Std Test Accuracy: {:.4f}".format(np.std(accs)))
         print("Std Test AUC: {:.4f}".format(np.std(aucs)))
+
+    def evaluate_malicious(self):
+        """ASR = fracao de amostras de test_mal preditas como o label envenenado
+        (retencao do label flip pelo modelo global); BA = acuracia sobre o test
+        set apenas dos clientes benignos."""
+        if not hasattr(self, 'index_malicious') or self.n_client_malicious <= 0:
+            return None, None
+        base = os.path.join('../dataset', self.dataset)
+        if not os.path.isdir(os.path.join(base, 'test_mal')):
+            return None, None
+
+        asr_ok, asr_n = 0, 0
+        ba_ok, ba_n = 0, 0
+        self.global_model.eval()
+        with torch.no_grad():
+            for i in range(self.num_clients):
+                mal = i in self.index_malicious
+                sub = 'test_mal' if mal else 'test'
+                path = os.path.join(base, sub, '{}.npz'.format(i))
+                if not os.path.exists(path):
+                    continue
+                with open(path, 'rb') as f:
+                    d = np.load(f, allow_pickle=True)['data'].tolist()
+                X = torch.Tensor(d['x']).float().to(self.device)
+                y = torch.Tensor(d['y']).long().to(self.device)
+                n = y.shape[0]
+                preds = []
+                bs = 256
+                for s in range(0, n, bs):
+                    out = self.global_model(X[s:s + bs])
+                    preds.append(out.argmax(dim=1))
+                pred = torch.cat(preds)
+                if mal:
+                    asr_n += n
+                    asr_ok += int((pred == y).sum().item())
+                else:
+                    ba_n += n
+                    ba_ok += int((pred == y).sum().item())
+        asr = asr_ok / asr_n if asr_n else None
+        ba = ba_ok / ba_n if ba_n else None
+        return asr, ba
 
     def print_(self, test_acc, test_auc, train_loss):
         print("Average Test Accuracy: {:.4f}".format(test_acc))

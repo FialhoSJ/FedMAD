@@ -3,8 +3,8 @@ import numpy as np
 import os
 
 
-def average_data(algorithm="", dataset="", goal="", times=10, cc="", rate_fake="",nmal=""):
-    test_acc = get_all_results_for_one_algo(algorithm, dataset, goal, times,cc, rate_fake,nmal)
+def average_data(algorithm="", dataset="", goal="", times=10, cc="", rate_fake="",nmal="", atk=""):
+    test_acc = get_all_results_for_one_algo(algorithm, dataset, goal, times,cc, rate_fake,nmal, atk)
 
     max_accuracy = []
     for i in range(times):
@@ -14,11 +14,12 @@ def average_data(algorithm="", dataset="", goal="", times=10, cc="", rate_fake="
     print("mean for best accuracy:", np.mean(max_accuracy))
 
 
-def get_all_results_for_one_algo(algorithm="", dataset="", goal="", times=10, cc="", rate_fake="",nmal=""):
+def get_all_results_for_one_algo(algorithm="", dataset="", goal="", times=10, cc="", rate_fake="",nmal="", atk=""):
     test_acc = []
     algorithms_list = [algorithm] * times
     for i in range(times):
-        file_name = dataset + "_" + algorithms_list[i] + "_"+ cc + "_" +rate_fake+ "_" + nmal + "_" + goal + "_" + str(i)
+        atk_part = atk + "_" if atk else ""
+        file_name = dataset + "_" + algorithms_list[i] + "_"+ cc + "_" +rate_fake+ "_" + nmal + "_" + atk_part + goal + "_" + str(i)
         test_acc.append(np.array(read_data_then_delete(file_name, delete=False)))
 
     return test_acc

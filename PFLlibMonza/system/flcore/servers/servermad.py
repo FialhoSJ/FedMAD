@@ -130,16 +130,28 @@ class ServerMAD(Server):
                 # 5. Cada agente especializado produz scores de anomalia
                 client_scores = {cid: [] for cid in self.uploaded_ids}
                 agent_scores_by_name = {}
+                agent_times = {}
                 for agent in self.agents:
+                    t0 = time.time()
                     scores = agent.analyze(
                         self.uploaded_models, self.global_model, metadata
                     )
+                    agent_times[agent.name] = time.time() - t0
                     agent_scores_by_name[agent.name] = scores
                     for cid, sc in zip(self.uploaded_ids, scores):
                         client_scores[cid].append(sc)
 
+                # Embeddings compactos dos modelos enviados (para t-SNE)
+                client_embeddings = {
+                    cid: self._pooled_embedding(m)
+                    for cid, m in zip(self.uploaded_ids, self.uploaded_models)
+                }
+                global_embedding = self._pooled_embedding(self.global_model)
+
                 # 6. Agregador (SLM ou media aritmetica) combina os scores
+                t0 = time.time()
                 final_scores = self.aggregator.aggregate(client_scores, metadata=metadata)
+                agg_time = time.time() - t0
 
                 # 7. Remove modelos de clientes com score > 0.6 (threshold)
                 removed_ids = []
@@ -170,6 +182,10 @@ class ServerMAD(Server):
                     "final_scores": dict(final_scores),
                     "removed_ids": removed_ids,
                     "quarantined_ids": quarantined_ids,
+                    "agent_times": agent_times,
+                    "agg_time": agg_time,
+                    "client_embeddings": client_embeddings,
+                    "global_embedding": global_embedding,
                 }
                 self.agent_round_log.append(log_entry)
 
@@ -205,12 +221,25 @@ class ServerMAD(Server):
         self.save_agent_results()
         self.save_global_model()
 
+    def _pooled_embedding(self, model, target_dim=512):
+        """Embedding compacto dos parametros de um modelo para o t-SNE:
+        flatten + normalizacao L2 + mean-pool por janelas (CPU-safe)."""
+        flat = torch.cat([p.detach().cpu().flatten() for p in model.parameters()])
+        flat = flat / (flat.norm() + 1e-10)
+        n = flat.numel()
+        w = max(1, n // target_dim)
+        pad = (-n) % w
+        if pad:
+            flat = torch.cat([flat, flat.new_zeros(pad)])
+        pooled = flat.view(-1, w).mean(dim=1)
+        return pooled.tolist()
+
     def save_agent_results(self):
         result_path = "../results/"
         if not os.path.exists(result_path):
             os.makedirs(result_path)
 
-        algo = f"{self.dataset}_{self.algorithm}_{self.cc}_{int(self.rate_client_fake*100)}_{self.n_client_malicious}"
+        algo = f"{self.dataset}_{self.algorithm}_{self.cc}_{int(self.rate_client_fake*100)}_{self.n_client_malicious}_{self.args.atack}"
         algo = f"{algo}_{self.goal}_{self.times}"
         file_path = result_path + f"{algo}_agentlog.json"
 
@@ -230,6 +259,12 @@ class ServerMAD(Server):
                 "final_scores": {str(k): float(v) for k, v in entry["final_scores"].items()},
                 "removed_ids": [int(c) for c in entry["removed_ids"]],
                 "quarantined_ids": [int(c) for c in entry["quarantined_ids"]],
+                "agent_times": {k: float(v) for k, v in entry.get("agent_times", {}).items()},
+                "agg_time": float(entry.get("agg_time", 0.0)),
+                "client_embeddings": {
+                    str(k): [float(x) for x in v] for k, v in entry.get("client_embeddings", {}).items()
+                },
+                "global_embedding": [float(x) for x in entry.get("global_embedding", [])],
             }
             log_serializable.append(entry_clean)
 
@@ -247,12 +282,16 @@ class ServerMAD(Server):
             "num_clients": int(self.num_clients),
             "n_client_malicious": int(self.n_client_malicious),
             "global_rounds": int(self.global_rounds),
+            "atack": str(self.args.atack),
+            "rate_client_fake": float(self.rate_client_fake),
             "agent_names": self.agent_names,
             "malicious_indices": [int(i) for i in self.index_malicious],
             "malicious_mask": malicious_mask,
             "agent_round_log": log_serializable,
             "rs_test_acc": [float(x) for x in self.rs_test_acc],
             "rs_test_auc": [float(x) for x in self.rs_test_auc],
+            "rs_asr": [float(x) for x in self.rs_asr],
+            "rs_ba": [float(x) for x in self.rs_ba],
             "budget": [float(x) for x in self.Budget],
         }
 

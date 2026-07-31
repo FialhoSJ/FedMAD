@@ -51,7 +51,12 @@ mv MNIST "$SCRIPT_DIR/PFLlibMonza/dataset/MNIST"
 cd "$SCRIPT_DIR"
 rm -rf "$GEN_DIR"
 
+# Splits envenenados (label flip) para o ataque 'label' (BA/ASR)
+echo "Gerando splits envenenados (train_mal/test_mal, label flip)..."
+"$PYTHON" "$SCRIPT_DIR/generate_malicious_split.py" "$SCRIPT_DIR/PFLlibMonza/dataset/MNIST" 10
+
 echo "============================================"
 echo " Dataset pronto em: PFLlibMonza/dataset/MNIST"
+echo " (inclui train_mal/ e test_mal/ para -atk label)"
 echo " Agora rode: bash run_fedmad_test.sh"
 echo "============================================"

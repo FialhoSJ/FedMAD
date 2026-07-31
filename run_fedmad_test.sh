@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# FedMAD - Script de Teste Baseline (configuracao LEVE)
+# FedMAD - Script de Teste Baseline LEVE (dataset: MNIST)
 # Uso: bash run_fedmad_test.sh [num_atks] [num_rounds] [num_clientes]
 # ============================================================
 set -e
@@ -10,11 +10,11 @@ SYSTEM_DIR="$SCRIPT_DIR/PFLlibMonza/system"
 
 # Valores padrao (leves para nao sobrecarregar o servidor)
 NM=${1:-5}          # numero de clientes maliciosos
-GR=${2:-30}         # rounds globais
+GR=${2:-50}         # rounds globais
 NC=${3:-50}         # total de clientes
 
 echo "============================================"
-echo " FedMAD Test - Baseline (leve)"
+echo " FedMAD Test - Baseline (leve / MNIST)"
 echo "============================================"
 echo " Clientes totais : $NC"
 echo " Clientes maliciosos : $NM"
@@ -36,12 +36,12 @@ $PYTHON main.py \
     -nc "$NC" \
     -nmc "$NM" \
     -gr "$GR" \
-    -jr 0.5 \
+    -jr 1.0 \
     -eg 5 \
     -atk all \
     -cc 6 \
     -rfake 1 \
-    -data Cifar10 \
+    -data MNIST \
     -m CNN \
     -t 1 \
     -ls 1 \

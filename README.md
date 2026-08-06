@@ -1,4 +1,4 @@
-# FedMAD — Federated Multi-Agent Defense (em desenvolvimento)
+# FedMAD — Federated Multi-Agent Defense 
 
 Defesa contra ataques de envenenamento em Federated Learning usando arquitetura multi-agente.
 

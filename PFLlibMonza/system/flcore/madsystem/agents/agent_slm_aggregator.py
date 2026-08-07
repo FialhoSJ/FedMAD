@@ -59,16 +59,15 @@ class SLMAggregatorAgent:
 
             print(f"[SLM-AGG] A carregar modelo: {self.model_name} em {self.device}...", flush=True)
 
-            # Carrega config primeiro para corrigir possiveis incompatibilidades
-            config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=True)
-            if hasattr(config, 'rope_scaling') and isinstance(config.rope_scaling, dict):
-                if 'type' not in config.rope_scaling:
-                    print("[SLM-AGG] A corrigir rope_scaling (falta 'type')", flush=True)
-                    config.rope_scaling['type'] = 'linear'
+            # Carrega config COM o transformers nativo (sem trust_remote_code):
+            # o modelo Phi-3 ja tem suporte embutido no transformers 5.x e nao precisa
+            # do modeling_phi3.py antigo do repositorio (que so suporta certos tipos
+            # de RoPE scaling e quebrava a carga no 4-bit).
+            config = AutoConfig.from_pretrained(self.model_name, trust_remote_code=False)
 
             gen_kwargs = dict(
                 config=config,
-                trust_remote_code=True,
+                trust_remote_code=False,
                 attn_implementation='eager',
             )
 
@@ -101,7 +100,7 @@ class SLMAggregatorAgent:
 
             self.tokenizer = AutoTokenizer.from_pretrained(
                 self.model_name,
-                trust_remote_code=True,
+                trust_remote_code=False,
             )
             # Garante pad_token para geracao (alguns modelos nao o definem)
             if self.tokenizer.pad_token is None:

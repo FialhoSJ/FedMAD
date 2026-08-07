@@ -24,7 +24,6 @@ Fluxo:
 """
 
 import json
-import re
 import sys
 import torch
 import logging
@@ -208,7 +207,7 @@ class SLMAggregatorAgent:
             + self._fewshot_examples()
         )
 
-    def _build_user_msg(self, client_ids, client_scores, metadata, default_weights):
+    def _build_user_msg(self, client_ids, client_scores, metadata, default_weights, include_layers=True):
         """Prompt do utilizador: bloco <client> por cliente (legibilidade p/ o SLM)."""
         agent_names = metadata.get("agent_names", ["Norm", "Cosine", "Entropy"])
         round_n = metadata.get("round", 0)
@@ -219,7 +218,7 @@ class SLMAggregatorAgent:
         for cid in client_ids:
             scores = client_scores.get(cid, [])
             parts = [f"{abbrev.get(agent_names[i], 'D' + str(i))}={s:.4f}" for i, s in enumerate(scores)]
-            stats = client_stats.get(cid, "")
+            stats = client_stats.get(cid, "") if include_layers else ""
             prev = default_weights.get(cid, 0.0)
             user += (
                 f"<client id={cid}>\n"
@@ -231,7 +230,7 @@ class SLMAggregatorAgent:
         user += "</request>"
         return user
 
-    def _build_prompt(self, client_models, client_scores, global_model, metadata):
+    def _build_prompt(self, client_models, client_scores, global_model, metadata, include_layers=True):
         """
         Constroi o prompt em formato chat (system/user/assistant).
 
@@ -241,6 +240,11 @@ class SLMAggregatorAgent:
         - Stats por camada de cada modelo cliente
         - Pesos de referencia (padrao dataset)
         - (Opcional) linha 'Reasoning:' (CoT) antes do JSON
+
+        Com MUITOS clientes o prompt pode estourar o contexto (4096). Se isso
+        acontecer, o tokenizer corta no meio de um bloco <client> e o SLM passa a
+        'ecoar' o input em vez de gerar JSON. Solucao: nunca truncar no meio do
+        prompt -- quem estourar o tamanho aqui e resolvido antes por _fit_prompt.
         """
         if metadata is None:
             metadata = {}
@@ -250,7 +254,7 @@ class SLMAggregatorAgent:
         n_detectors = len(agent_names)
 
         system_msg = self._build_system_msg(agent_names, n_detectors)
-        user_msg = self._build_user_msg(client_ids, client_scores, metadata, default_weights)
+        user_msg = self._build_user_msg(client_ids, client_scores, metadata, default_weights, include_layers=include_layers)
 
         messages = [
             {"role": "system", "content": system_msg},
@@ -259,9 +263,35 @@ class SLMAggregatorAgent:
         prompt = self.tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
         return prompt
 
-    # ------------------------------------------------------------------
-    # Parsing da resposta
-    # ------------------------------------------------------------------
+    def _fit_prompt(self, prompt, client_ids, client_scores, metadata, max_tokens_ctx):
+        """
+        Garante que o prompt inteiro (system+fewshot+clientes) NAO passe do contexto.
+
+        Se passar, remove os clientes do FINAL (blocos <client> completos, nunca
+        cortados no meio) e reconstroi. Clientes removidos ficam de fora - o servidor
+        usa o peso padrao (dataset) para eles, sem quebrar a agregacao.
+        """
+        def _too_long(p):
+            if self.tokenizer is None:
+                return True
+            t = self.tokenizer(p, return_tensors="pt")
+            return t.input_ids.shape[1] > max_tokens_ctx
+
+        if not _too_long(prompt):
+            return prompt, client_ids
+
+        # Remove blocos do fim ate caber (estilo greedy, 4 a 4 para nao refazer mto)
+        drop = 4
+        while drop < len(client_ids):
+            keep = client_ids[:-drop] if drop > 0 else client_ids
+            sub = dict(metadata)
+            sub["client_ids"] = keep
+            new_prompt = self._build_prompt(None, {}, None, sub, include_layers=False)
+            if not _too_long(new_prompt):
+                print(f"[SLM-AGG] AVISO: prompt excede contexto -> {len(client_ids) - len(keep)} clientes omitidos", flush=True)
+                return new_prompt, keep
+            drop += 4
+        return prompt, client_ids
 
     def _parse_response(self, text):
         """
@@ -274,17 +304,27 @@ class SLMAggregatorAgent:
         """
         results = {}
 
-        # Estrategia 1: bloco JSON array completo
-        try:
-            json_match = re.search(r'\[.*\]', text, re.DOTALL)
-            if json_match:
-                parsed = json.loads(json_match.group())
+# Estrategia 1: bloco JSON array completo.
+        # Procura o primeiro '[' e tenta fechar em cada ']' subsequente:
+        # o SLM pode cortar a resposta no meio, entao tentamos ate achar JSON valido.
+        start = text.find('[')
+        while start != -1:
+            end = text.find(']', start)
+            parsed = None
+            while end != -1:
+                try:
+                    parsed = json.loads(text[start:end + 1])
+                    break
+                except (json.JSONDecodeError, ValueError):
+                    end = text.find(']', end + 1)
+            if parsed is not None:
                 for item in parsed:
                     cid = item.get("client_id")
                     if cid is not None:
                         results[cid] = item
-        except (json.JSONDecodeError, AttributeError):
-            pass
+            if results:
+                break
+            start = text.find('[', start + 1)
 
         # Estrategia 2: parse linha a linha (SLM pode gerar JSON fragmentado)
         if not results:
@@ -342,16 +382,23 @@ class SLMAggregatorAgent:
 
         # Extrai stats dos modelos (tokens semanticos para o prompt)
         client_stats = {}
-        for cid, model in zip(client_ids, client_models):
-            client_stats[cid] = self._model_to_stats(model.state_dict())
+        include_layers = len(client_ids) <= 24  # layers so com pool pequeno
+        if include_layers:
+            for cid, model in zip(client_ids, client_models):
+                client_stats[cid] = self._model_to_stats(model.state_dict())
         metadata = dict(metadata)
         metadata["client_stats"] = client_stats
 
         # Constroi o prompt com stats + scores + pesos anteriores
-        prompt = self._build_prompt(client_models, client_scores, None, metadata)
+        # (sem truncar no meio de bloco; se estourar, _fit_prompt remove clientes)
+        ctx = 4096 - self.max_tokens - 64
+        prompt, client_ids = self._fit_prompt(
+            self._build_prompt(client_models, client_scores, None, metadata, include_layers=include_layers),
+            client_ids, client_scores, metadata, ctx,
+        )
 
         try:
-            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=2048)
+            inputs = self.tokenizer(prompt, return_tensors="pt", truncation=True, max_length=3600)
             inputs = {k: v.to(self.device) for k, v in inputs.items()}
 
             print(f"[SLM-AGG] A inferir pesos para round {round_n} ({len(client_ids)} clients)...", flush=True)

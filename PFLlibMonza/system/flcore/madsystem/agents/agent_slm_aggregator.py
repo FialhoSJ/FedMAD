@@ -74,12 +74,20 @@ class SLMAggregatorAgent:
 
             if self.device == "cuda":
                 # GPU: 4-bit quantizacao (bitsandbytes) para caber ~8GB VRAM
+                from transformers import BitsAndBytesConfig
                 import accelerate  # noqa: F401
+
+                quant_config = BitsAndBytesConfig(
+                    load_in_4bit=True,
+                    bnb_4bit_compute_dtype=torch.float16,
+                    bnb_4bit_quant_type="nf4",
+                    bnb_4bit_use_double_quant=True,
+                )
                 self.model = AutoModelForCausalLM.from_pretrained(
                     self.model_name,
                     torch_dtype=torch.float16,
                     device_map="auto",
-                    load_in_4bit=True,
+                    quantization_config=quant_config,
                     **gen_kwargs,
                 )
             else:

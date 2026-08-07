@@ -102,33 +102,31 @@ run_fedavg() {
 # ---------- single ----------
 if [ "$MODE" = "single" ]; then
     run_mad "FedMAD baseline (-atk all)" -nmc "$NM" -atk all \
-        -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
+        -agent_norm True -agent_cos True -agent_ent True
 
 # ---------- attack_label ----------
 elif [ "$MODE" = "attack_label" ]; then
     run_mad "FedMAD -atk label" -nmc "$NM" -atk label \
-        -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
+        -agent_norm True -agent_cos True -agent_ent True
 
 # ---------- robustness ----------
 elif [ "$MODE" = "robustness" ]; then
     for nmc in 3 5 8 10; do
         run_mad "FedMAD -atk label, nmc=$nmc (robustez)" -nmc "$nmc" -atk label \
-            -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
+            -agent_norm True -agent_cos True -agent_ent True
     done
 
 # ---------- comparison ----------
 elif [ "$MODE" = "comparison" ]; then
     run_fedavg "FedAvg vulnerable (-atk label)" -nmc "$NM" -atk label
-    run_mad "FedMAD - so L2Norm" -nmc "$NM" -atk label \
-        -agent_norm2 True -agent_norm3 False -agent_cos False -agent_ent False
-    run_mad "FedMAD - so L3Norm" -nmc "$NM" -atk label \
-        -agent_norm2 False -agent_norm3 True -agent_cos False -agent_ent False
+    run_mad "FedMAD - so Norm (L2+L3)" -nmc "$NM" -atk label \
+        -agent_norm True -agent_cos False -agent_ent False
     run_mad "FedMAD - so Cosine" -nmc "$NM" -atk label \
-        -agent_norm2 False -agent_norm3 False -agent_cos True -agent_ent False
+        -agent_norm False -agent_cos True -agent_ent False
     run_mad "FedMAD - so Entropy" -nmc "$NM" -atk label \
-        -agent_norm2 False -agent_norm3 False -agent_cos False -agent_ent True
+        -agent_norm False -agent_cos False -agent_ent True
     run_mad "FedMAD - full (todas as defesas)" -nmc "$NM" -atk label \
-        -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
+        -agent_norm True -agent_cos True -agent_ent True
 
 # ---------- all ----------
 elif [ "$MODE" = "all" ]; then

@@ -34,8 +34,7 @@ Em desenvolvimento. Código baseado no [PFLlib](https://github.com/TsingZ0/PFLli
 
 ## Próximos passos
 - [x] Client MAD com encoder SSL (SimCLR)
-- [x] Agent L2Norm — norma L2 do desvio `||W_i - W_global||_2`
-- [x] Agent L3Norm — norma L3 do desvio `||W_i - W_global||_3`
+- [x] Agent Norm — norma do desvio `||W_i - W_global||_{2,3}` (L2+L3 combinados)
 - [x] Agent Cosine — 1 - similaridade de cosseno com o modelo global
 - [x] Agent Entropy — entropia de Shannon dos pesos
 - [x] Aggregator Agent (fusão aritmética de scores — sem SLM)

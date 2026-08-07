@@ -34,14 +34,12 @@ class ServerMAD(Server):
         from flcore.madsystem.aggregator_agent import AggregatorAgent
 
         # Detectores especializados (defesas classicas, produzem scores de anomalia)
+        # Norm combina L2+L3 (||W_i - W_global||_{2,3}) num unico agent
         self.agents = []
         self.agent_names = []
-        if getattr(args, 'agent_norm2', True):
-            self.agents.append(AgentNormDefense(args, p=2, name="L2Norm"))
-            self.agent_names.append("L2Norm")
-        if getattr(args, 'agent_norm3', True):
-            self.agents.append(AgentNormDefense(args, p=3, name="L3Norm"))
-            self.agent_names.append("L3Norm")
+        if getattr(args, 'agent_norm', True):
+            self.agents.append(AgentNormDefense(args))
+            self.agent_names.append("Norm")
         if getattr(args, 'agent_cos', True):
             self.agents.append(AgentCosineDefense(args))
             self.agent_names.append("Cosine")

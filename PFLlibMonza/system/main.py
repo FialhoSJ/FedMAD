@@ -519,10 +519,8 @@ if __name__ == "__main__":
     parser.add_argument('-v', '--verbose', type=bool, default=False)
     parser.add_argument('-bhv_lb', '--bhv_lookback', type=int, default=5)
     # Toggle individual agents (defesas classicas: True = ativo, False = desativado)
-    parser.add_argument('-agent_norm2', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable L2Norm agent (||W_i - W_global||_2)")
-    parser.add_argument('-agent_norm3', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable L3Norm agent (||W_i - W_global||_3)")
+    parser.add_argument('-agent_norm', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable Norm agent (L2+L3 combinados: ||W_i - W_global||_{2,3})")
     parser.add_argument('-agent_cos', type=lambda x: x.lower() == 'true', default=True,
                         help="Enable Cosine agent (1 - cosine(W_i, W_global))")
     parser.add_argument('-agent_ent', type=lambda x: x.lower() == 'true', default=True,
@@ -539,6 +537,8 @@ if __name__ == "__main__":
                         help="Run SLM every N rounds (1=each, 5=every 5 rounds)")
     parser.add_argument('-slm_ml', '--slm_max_layers', type=int, default=8,
                         help="Max layers analyzed per client model (compactness of the prompt)")
+    parser.add_argument('-slm_cot', '--slm_cot', type=lambda x: x.lower() == 'true', default=False,
+                        help="Allow a short 'Reasoning:' line before the JSON (chain-of-thought)")
     parser.add_argument('-score_th', '--score_th', type=float, default=0.6,
                         help="Removal threshold for mean detector score (detection, no SLM)")
     args = parser.parse_args()

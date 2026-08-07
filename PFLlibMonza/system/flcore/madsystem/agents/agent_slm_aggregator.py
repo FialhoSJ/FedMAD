@@ -6,7 +6,7 @@ com base na analise semantica dos parametros + scores dos detectores.
 
 IMPORTANTE (divisao de responsabilidades):
 - DETECCAO/defesa: feita APENAS pelos agentes de defesa classica (sem SLM)
-  (L2Norm, L3Norm, Cosine, Entropy) + fusao aritmetica.
+  (Norm (L2+L3), Cosine, Entropy) + fusao aritmetica.
   O SLM NAO decide quem e malicioso (evita risco de erro de deteccao).
 - AGREGACAO: o SLM analisa os parametros recebidos e gera os pesos de
   agregacao dos modelos que passaram pela deteccao (substitui FedAvg puro).
@@ -131,51 +131,119 @@ class SLMAggregatorAgent:
         return " | ".join(stats)
 
     # ------------------------------------------------------------------
-    # Construcao do prompt
+    # Construcao do prompt (system prompt estruturado + few-shot)
     # ------------------------------------------------------------------
+
+    @staticmethod
+    def _fewshot_examples():
+        """Exemplos few-shot para o SLM aprender o contrato de saida."""
+        return (
+            "<example_1>\n"
+            "user: Round 1 | clients: 3\n"
+            'Client 0 | prev_weight=0.33 | detectors: NM=0.10, CO=0.12, EN=0.15 | layers: conv1=0.0,0.01,1.2 | conv2=0.0,0.02,3.1\n'
+            'Client 1 | prev_weight=0.33 | detectors: NM=0.08, CO=0.10, EN=0.12 | layers: conv1=0.0,0.01,1.1 | conv2=0.0,0.02,2.9\n'
+            'Client 2 | prev_weight=0.34 | detectors: NM=0.09, CO=0.11, EN=0.13 | layers: conv1=0.0,0.01,1.3 | conv2=0.0,0.02,3.0\n'
+            "assistant: [{\"client_id\": 1, \"weight\": 0.35, \"reason\": \"lowest anomaly scores, params near global\"},\n"
+            '           {"client_id": 2, "weight": 0.33, "reason": "low scores, similar to peers"},\n'
+            '           {"client_id": 3, "weight": 0.32, "reason": "low scores, negligible deviation"}]\n'
+            "</example_1>\n"
+            "<example_2>\n"
+            "Client: Round 5 | clients: 2\n"
+            'Client 7 | prev_weight: 0.50 | detectors: NM=0.95, CO=0.88, EN=0.90 | layers: conv1=0.0,9.9,99.0 | conv2=0.0,8.8,88.0\n'
+            'Client 8 | prev_weight: 0.50 | detectors: NM=0.10, CO=0.12, EN=0.11 | layers: conv1=0.0,0.01,1.1 | conv2=0.0,0.02,2.9\n'
+            "{\"client_id\": 7, \"weight\": 0.30, \"reason\": \"high anomaly scores\"},\n"
+            '         {"client_id": 8, "weight": 0.70, "reason": "low anomaly scores, consistent params"}]\n'
+            "</example_2>\n"
+        )
+
+    def _build_system_msg(self, agent_names, n_detectors):
+        """
+        System prompt estruturado (role/task/rules/output_format).
+        Instrucao opcional de chain-of-thought curto quando args.slm_cot.
+        """
+        cot_rule = (
+            "Before the JSON, output a single line starting with 'Reasoning:' "
+            "summarizing which clients look most/least reliable. Then the JSON array."
+            if getattr(self.args, 'slm_cot', False)
+            else ""
+        )
+        return (
+            "<role>\n"
+            "You are the Aggregation Weight Controller of a federated learning server\n"
+            "that uses weighted FedAvg aggregation.\n"
+            "Your ONLY job: assign aggregation weights to the client models residual after\n"
+            f"a defense stage handled by {n_detectors} detector agents ({', '.join(agent_names)}).\n"
+            "You do NOT decide who is malicious: the defense agents already did that.\n"
+            "</role>\n\n"
+            "<task>\n"
+            "For each client listed in the user message, assign an aggregation weight in [0,1].\n"
+            "The weight expresses how much each client model contributes to the global model.\n"
+            "</task>\n\n"
+            "<rules>\n"
+            "- R1: weights must be >= 0 and must sum to approximately 1.0.\n"
+            "- R2: a client with LOW anomaly scores should receive a HIGHER weight than one\n"
+            "     with HIGH anomaly scores.\n"
+            "- R3: if all scores are low and similar, keep weights close to uniform.\n"
+            "     if one client stands out with higher scores, reduce its weight notably and\n"
+            "     redistribute it to the others.\n"
+            "- R4: only reference client_ids present in the request; never invent ids.\n"
+            "- R5: your response must contain EXACTLY ONE JSON array and nothing else\n"
+            "     except the optional Reasoning line (R5a).\n"
+            "- R5a: " + cot_rule + "\n"
+            "</rules>\n\n"
+            "<output_format>\n"
+            "Return one JSON array only. Element schema:\n"
+            '{"client_id": <int>, "weight": <float 0..1>, "reason": "<one short phrase>"}\n'
+            "Example:\n"
+            '[{"client_id": 0, "weight": 0.35, "reason": "low anomaly scores, params near global"},\n'
+            ' {"client_id": 1, "weight": 0.15, "reason": "moderate anomaly scores, params deviate"}]\n'
+            "</output_format>\n\n"
+            + self._fewshot_examples()
+        )
+
+    def _build_user_msg(self, client_ids, client_scores, metadata, default_weights):
+        """Prompt do utilizador: bloco <client> por cliente (legibilidade p/ o SLM)."""
+        agent_names = metadata.get("agent_names", ["Norm", "Cosine", "Entropy"])
+        round_n = metadata.get("round", 0)
+        abbrev = {name: name[:2].upper() for name in agent_names}
+        client_stats = metadata.get("client_stats", {})
+
+        user = f"<request>\nRound {round_n} | Survival clients: {len(client_ids)}\n"
+        for cid in client_ids:
+            scores = client_scores.get(cid, [])
+            parts = [f"{abbrev.get(agent_names[i], 'D' + str(i))}={s:.4f}" for i, s in enumerate(scores)]
+            stats = client_stats.get(cid, "")
+            prev = default_weights.get(cid, 0.0)
+            user += (
+                f"<client id={cid}>\n"
+                f"prev_weight={prev:.4f}\n"
+                f"detectors: {', '.join(parts)}\n"
+                f"layers: {stats}\n"
+                "</client>\n"
+            )
+        user += "</request>"
+        return user
 
     def _build_prompt(self, client_models, client_scores, global_model, metadata):
         """
         Constroi o prompt em formato chat (system/user/assistant).
 
         O prompt inclui:
-        - Sistema curto + exemplo few-shot do JSON esperado
-        - Scores dos detectores (sem SLM) por cliente
+        - System prompt estruturado: role/task/rules/output_format + few-shot
+        - Scores dos detectores (sem SLM) por cliente (já tratados pela defesa)
         - Stats por camada de cada modelo cliente
-        - Pesos do round anterior (padrao dataset) como referencia
+        - Pesos de referencia (padrao dataset)
+        - (Opcional) linha 'Reasoning:' (CoT) antes do JSON
         """
-        round_n = metadata.get("round", 0)
-        agent_names = metadata.get("agent_names", ["L2Norm", "L3Norm", "Cosine", "Entropy"])
-        n_detectors = len(agent_names)
-        default_weights = metadata.get("default_weights", {})
+        if metadata is None:
+            metadata = {}
         client_ids = metadata.get("client_ids", list(client_scores.keys()))
+        default_weights = metadata.get("default_weights", {})
+        agent_names = metadata.get("agent_names", ["Norm", "Cosine", "Entropy"])
+        n_detectors = len(agent_names)
 
-        # Few-shot: mostra 1 exemplo para o modelo aprender o formato JSON
-        example_json = f'''
-Example output:
-[{{"client_id": 0, "weight": 0.35, "reason": "low anomaly scores, params close to global model"}},
- {{"client_id": 1, "weight": 0.15, "reason": "moderate anomaly scores, params deviate"}}]
-'''
-
-        system_msg = (
-            "You are the aggregation controller of a federated learning server.\n"
-            "Assign an aggregation weight to each client model for weighted FedAvg.\n"
-            f"Detector scores (0=benign, 1=malicious) come from {n_detectors} detectors: "
-            f"{', '.join(agent_names)}.\n"
-            "Higher weight = more influence in the global model. Weights must be >= 0 "
-            "and roughly sum to 1.\n"
-            "Output ONLY the JSON array. No preamble, no explanations, no markdown.\n"
-            + example_json
-        )
-
-        abbrev = {name: name[:2].upper() for name in agent_names}
-        user_msg = f"Round {round_n} | clients: {len(client_ids)}\n"
-        for cid in client_ids:
-            scores = client_scores.get(cid, [])
-            parts = [f"{abbrev.get(agent_names[i], f'D{i}')}={s:.4f}" for i, s in enumerate(scores)]
-            prev_w = default_weights.get(cid, 0.0)
-            stats = metadata.get("client_stats", {}).get(cid, "")
-            user_msg += f"Client {cid} | prev_weight={prev_w:.4f} | detectors: {', '.join(parts)} | layers: {stats}\n"
+        system_msg = self._build_system_msg(agent_names, n_detectors)
+        user_msg = self._build_user_msg(client_ids, client_scores, metadata, default_weights)
 
         messages = [
             {"role": "system", "content": system_msg},

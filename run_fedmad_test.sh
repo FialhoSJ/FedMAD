@@ -2,7 +2,9 @@
 # ============================================================
 # FedMAD - Script de Testes (dataset: MNIST)
 # Uso:
-#   bash run_fedmad_test.sh [mode] [num_atks] [num_rounds] [num_clientes]
+#   bash run_fedmad_test.sh [mode] [num_atks] [num_rounds] [num_clientes] [slm]
+#
+#   slm: True = agregacao de modelo com SLM (Phi-3-mini), False = FedAvg puro
 #
 # Modes:
 #   single        : uma execucao MAD baseline (-atk all)   [padrao]
@@ -27,6 +29,7 @@ else
 fi
 GR=${3:-50}         # rounds globais
 NC=${4:-50}         # total de clientes
+SLM=${5:-False}     # agregacao com SLM (True/False)
 
 # Ativar ambiente virtual (prioriza venv_wsl, depois .venv)
 PYTHON="python"
@@ -44,6 +47,7 @@ echo "============================================"
 echo " Clientes totais : $NC"
 echo " Clientes maliciosos (default): $NM"
 echo " Rounds globais  : $GR"
+echo " SLM agregacao   : $SLM"
 echo "============================================"
 
 run_experiment() {
@@ -70,7 +74,8 @@ run_mad() {
         -ls 1 \
         -dev cuda \
         -did 0 \
-        -slm_e False \
+        -slm_e "$SLM" \
+        -score_th 0.6 \
         "$@"
 }
 
@@ -97,33 +102,33 @@ run_fedavg() {
 # ---------- single ----------
 if [ "$MODE" = "single" ]; then
     run_mad "FedMAD baseline (-atk all)" -nmc "$NM" -atk all \
-        -agent_em True -agent_fedre True -agent_bhv True -agent_flg True
+        -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
 
 # ---------- attack_label ----------
 elif [ "$MODE" = "attack_label" ]; then
     run_mad "FedMAD -atk label" -nmc "$NM" -atk label \
-        -agent_em True -agent_fedre True -agent_bhv True -agent_flg True
+        -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
 
 # ---------- robustness ----------
 elif [ "$MODE" = "robustness" ]; then
     for nmc in 3 5 8 10; do
         run_mad "FedMAD -atk label, nmc=$nmc (robustez)" -nmc "$nmc" -atk label \
-            -agent_em True -agent_fedre True -agent_bhv True -agent_flg True
+            -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
     done
 
 # ---------- comparison ----------
 elif [ "$MODE" = "comparison" ]; then
     run_fedavg "FedAvg vulnerable (-atk label)" -nmc "$NM" -atk label
-    run_mad "FedMAD - so EmInspector" -nmc "$NM" -atk label \
-        -agent_em True -agent_fedre False -agent_bhv False -agent_flg False
-    run_mad "FedMAD - so FedREDefense" -nmc "$NM" -atk label \
-        -agent_em False -agent_fedre True -agent_bhv False -agent_flg False
-    run_mad "FedMAD - so Behavior" -nmc "$NM" -atk label \
-        -agent_em False -agent_fedre False -agent_bhv True -agent_flg False
-    run_mad "FedMAD - so FedLLMGuard" -nmc "$NM" -atk label \
-        -agent_em False -agent_fedre False -agent_bhv False -agent_flg True
-    run_mad "FedMAD - full (todos os agentes)" -nmc "$NM" -atk label \
-        -agent_em True -agent_fedre True -agent_bhv True -agent_flg True
+    run_mad "FedMAD - so L2Norm" -nmc "$NM" -atk label \
+        -agent_norm2 True -agent_norm3 False -agent_cos False -agent_ent False
+    run_mad "FedMAD - so L3Norm" -nmc "$NM" -atk label \
+        -agent_norm2 False -agent_norm3 True -agent_cos False -agent_ent False
+    run_mad "FedMAD - so Cosine" -nmc "$NM" -atk label \
+        -agent_norm2 False -agent_norm3 False -agent_cos True -agent_ent False
+    run_mad "FedMAD - so Entropy" -nmc "$NM" -atk label \
+        -agent_norm2 False -agent_norm3 False -agent_cos False -agent_ent True
+    run_mad "FedMAD - full (todas as defesas)" -nmc "$NM" -atk label \
+        -agent_norm2 True -agent_norm3 True -agent_cos True -agent_ent True
 
 # ---------- all ----------
 elif [ "$MODE" = "all" ]; then

@@ -517,28 +517,30 @@ if __name__ == "__main__":
     parser.add_argument('-ssl_ep', '--ssl_epochs', type=int, default=0)
     parser.add_argument('-ssl_pd', '--ssl_proj_dim', type=int, default=128)
     parser.add_argument('-v', '--verbose', type=bool, default=False)
-    parser.add_argument('-fedre_latent', '--fedre_latent', type=int, default=16)
-    parser.add_argument('-fedre_ep', '--fedre_epochs', type=int, default=10)
-    parser.add_argument('-fedre_lr', '--fedre_lr', type=float, default=0.01)
     parser.add_argument('-bhv_lb', '--bhv_lookback', type=int, default=5)
-    # Toggle individual agents (True = ativo, False = desativado)
-    parser.add_argument('-agent_em', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable EmInspector agent")
-    parser.add_argument('-agent_fedre', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable FedREDefense agent")
-    parser.add_argument('-agent_bhv', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable Behavior agent")
-    parser.add_argument('-agent_flg', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable FedLLMGuard agent")
-    # SLM Aggregator args (referência: SLMFORGE, Sheikhi 2025)
+    # Toggle individual agents (defesas classicas: True = ativo, False = desativado)
+    parser.add_argument('-agent_norm2', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable L2Norm agent (||W_i - W_global||_2)")
+    parser.add_argument('-agent_norm3', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable L3Norm agent (||W_i - W_global||_3)")
+    parser.add_argument('-agent_cos', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable Cosine agent (1 - cosine(W_i, W_global))")
+    parser.add_argument('-agent_ent', type=lambda x: x.lower() == 'true', default=True,
+                        help="Enable Entropy agent (Shannon entropy of weights)")
+    # SLM Aggregator args (SLM gera PESOS DE AGREGACAO; deteccao e sem SLM)
+    # Referencia: SLMFORGE (Sheikhi, IEEE BigData 2025) - SLMs em FL para cybersecurity
     parser.add_argument('-slm_e', '--slm_enabled', type=lambda x: x.lower() == 'true', default=True,
-                        help="Enable SLM aggregator (True) or fallback arithmetic mean (False)")
+                        help="Enable SLM for MODEL AGGREGATION weights (True) or pure FedAvg (False)")
     parser.add_argument('-slm_m', '--slm_model', type=str, default='microsoft/Phi-3-mini-4k-instruct',
-                        help="SLM model name/path for aggregator reasoning")
-    parser.add_argument('-slm_mt', '--slm_max_tokens', type=int, default=2048,
+                        help="SLM model name/path for aggregation reasoning")
+    parser.add_argument('-slm_mt', '--slm_max_tokens', type=int, default=1024,
                         help="Max tokens in SLM response per client batch")
     parser.add_argument('-slm_n', '--slm_every_n', type=int, default=1,
                         help="Run SLM every N rounds (1=each, 5=every 5 rounds)")
+    parser.add_argument('-slm_ml', '--slm_max_layers', type=int, default=8,
+                        help="Max layers analyzed per client model (compactness of the prompt)")
+    parser.add_argument('-score_th', '--score_th', type=float, default=0.6,
+                        help="Removal threshold for mean detector score (detection, no SLM)")
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id

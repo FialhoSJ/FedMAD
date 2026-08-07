@@ -24,6 +24,24 @@ class AgentBase(ABC):
         if max_s - min_s < 1e-8:
             return [0.5] * len(raw_scores)
         return ((scores - min_s) / (max_s - min_s)).tolist()
+
+    def robust_anomaly_scores(self, raw_scores):
+        """
+        Converte valores brutos em scores de anomalia em [0,1) usando
+        z-score robusto (mediana + MAD) com sigmoide.
+
+        - Sem outliers: todos os scores ficam proximos de 0.5 (sem remocoes)
+        - Com outlier (ex.: envenenamento): o desvio vira score alto
+        """
+        values = torch.tensor(raw_scores, dtype=torch.float32, device=self.device)
+        if values.numel() == 0:
+            return []
+        if values.numel() == 1:
+            return [0.5]
+        median = values.median()
+        mad = (values - median).abs().median() + 1e-8
+        z = (values - median) / (1.4826 * mad)
+        return torch.sigmoid(z).tolist()
     
     def cosine_similarity(self, a, b):
         a_f = torch.cat([p.flatten().to(self.device) for p in a.values()])

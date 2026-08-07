@@ -33,24 +33,23 @@ Em desenvolvimento. Código baseado no [PFLlib](https://github.com/TsingZ0/PFLli
 - [x] Mecanismo de quarentena
 
 ## Próximos passos
-- [ ] Client MAD com encoder SSL (SimCLR)
-- [ ] Agent 1 — EmInspector (similaridade de embedding)
-- [ ] Agent 2 — FedREDefense (erro de reconstrução)
-- [ ] Agent 3 — Behavior (análise temporal)
-- [ ] Aggregator Agent (fusão de scores)
-- [ ] Server MAD (orquestração)
-- [ ] Experimentos comparativos: FedAvg, EmInspector, FedREDefense, FedMAD
+- [x] Client MAD com encoder SSL (SimCLR)
+- [x] Agent L2Norm — norma L2 do desvio `||W_i - W_global||_2`
+- [x] Agent L3Norm — norma L3 do desvio `||W_i - W_global||_3`
+- [x] Agent Cosine — 1 - similaridade de cosseno com o modelo global
+- [x] Agent Entropy — entropia de Shannon dos pesos
+- [x] Aggregator Agent (fusão aritmética de scores — sem SLM)
+- [x] Server MAD (orquestração: detecção sem SLM + agregação com SLM)
+- [ ] Experimentos comparativos: FedAvg, cada defesa isolada, FedMAD completo
 
 ## Como executar
 
 ```bash
 cd system
-python main.py -data Cifar10 -m CNN -algo FedAvg -nc 20 -gr 200
+python main.py -data Cifar10 -m CNN -algo MAD -nc 20 -gr 200 -slm_e False
 ```
 
 ## Referências
 
-- EmInspector — detecção por embedding (arXiv)
-- FedREDefense — detecção por erro de reconstrução (ICML 2024)
-- SimCLR — aprendizado contrastivo (NeurIPS 2020)
+- SLMFORGE — SLMs em FL para cybersecurity (IEEE BigData 2025)
 - PFLlib — biblioteca FL (JMLR 2025)

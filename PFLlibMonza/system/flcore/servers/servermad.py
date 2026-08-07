@@ -26,35 +26,44 @@ class ServerMAD(Server):
         self.agent_round_log = []       # lista de dicts por round
 
         # Importacoes tardias para evitar dependencias circulares
-        from flcore.madsystem.agents.agent_emInspector import AgentEmInspector
-        from flcore.madsystem.agents.agent_fedREDefense import AgentFedREDefense
-        from flcore.madsystem.agents.agent_behavior import AgentBehavior
-        from flcore.madsystem.agents.agent_fedllmguard import AgentFedLLMGuard
+        # Defesas classicas contra envenenamento de modelo (sem artigos/SLM)
+        from flcore.madsystem.agents.agent_norm import AgentNormDefense
+        from flcore.madsystem.agents.agent_cosine import AgentCosineDefense
+        from flcore.madsystem.agents.agent_entropy import AgentEntropyDefense
         from flcore.madsystem.agents.agent_slm_aggregator import SLMAggregatorAgent
         from flcore.madsystem.aggregator_agent import AggregatorAgent
 
-        # Detectores especializados (cada um produz scores de anomalia)
+        # Detectores especializados (defesas classicas, produzem scores de anomalia)
         self.agents = []
         self.agent_names = []
-        if getattr(args, 'agent_em', True):
-            self.agents.append(AgentEmInspector(args, encoder=self.encoder))
-            self.agent_names.append("EmInspector")
-        if getattr(args, 'agent_fedre', True):
-            self.agents.append(AgentFedREDefense(args))
-            self.agent_names.append("FedREDefense")
-        if getattr(args, 'agent_bhv', True):
-            self.agents.append(AgentBehavior(args))
-            self.agent_names.append("Behavior")
-        if getattr(args, 'agent_flg', True):
-            self.agents.append(AgentFedLLMGuard(args))
-            self.agent_names.append("FedLLMGuard")
+        if getattr(args, 'agent_norm2', True):
+            self.agents.append(AgentNormDefense(args, p=2, name="L2Norm"))
+            self.agent_names.append("L2Norm")
+        if getattr(args, 'agent_norm3', True):
+            self.agents.append(AgentNormDefense(args, p=3, name="L3Norm"))
+            self.agent_names.append("L3Norm")
+        if getattr(args, 'agent_cos', True):
+            self.agents.append(AgentCosineDefense(args))
+            self.agent_names.append("Cosine")
+        if getattr(args, 'agent_ent', True):
+            self.agents.append(AgentEntropyDefense(args))
+            self.agent_names.append("Entropy")
         print(f"[MAD] Agentes ativos ({len(self.agents)}): {', '.join(self.agent_names)}")
-        # Agregador: substitui a media aritmetica por raciocinio com SLM
-        # (Phi-3-mini ou TinyLlama) que analisa os scores + metadados
+
+        # --- Divisao de responsabilidades (SLM NAO decide deteccao) ---
+        # 1. DETECCAO: fusao aritmetica dos scores dos agentes estatisticos,
+        #    SEM SLM (evita risco de erro de deteccao do LLM)
+        self.detector_aggregator = AggregatorAgent(args)
+
+        # 2. AGREGACAO DE MODELO: SLM analisa parametros + scores e gera
+        #    pesos de agregacao (weighted FedAvg). Fallback: FedAvg puro.
         if getattr(args, 'slm_enabled', True):
-            self.aggregator = SLMAggregatorAgent(args)      # decisao com LLM
+            self.slm_aggregator = SLMAggregatorAgent(args)
         else:
-            self.aggregator = AggregatorAgent(args)          # fallback: media aritmetica
+            self.slm_aggregator = None
+
+        # Threshold de remocao (cliente com score medio > limite e removido)
+        self.score_threshold = float(getattr(args, 'score_th', 0.6))
 
         print(f"\nJoin ratio / total clients: {self.join_ratio} / {self.num_clients}")
         print("Finished creating server and clients.")
@@ -111,6 +120,8 @@ class ServerMAD(Server):
 
             # 4. Executa detecao de anomalias (apenas apos o round 0)
             if i > 0 and len(self.uploaded_models) > 0:
+                # Snapshot dos IDs ANTES da remocao (para logs com zip correto)
+                uploaded_ids_before = list(self.uploaded_ids)
                 # IDs dos clientes atualmente em quarentena (metadados para o SLM)
                 quarantined_ids = [
                     cid for cid, status in self.client_quarantine_dict.items()
@@ -125,6 +136,9 @@ class ServerMAD(Server):
                     "encoder": self.encoder,
                     "quarantined_ids": quarantined_ids,
                     "agent_names": self.agent_names,
+                    "default_weights": {
+                        cid: w for cid, w in zip(self.uploaded_ids, self.uploaded_weights)
+                    },
                 }
 
                 # 5. Cada agente especializado produz scores de anomalia
@@ -148,16 +162,17 @@ class ServerMAD(Server):
                 }
                 global_embedding = self._pooled_embedding(self.global_model)
 
-                # 6. Agregador (SLM ou media aritmetica) combina os scores
+                # 6. Fusao dos scores DOS AGENTES (aritmetica, SEM SLM)
                 t0 = time.time()
-                final_scores = self.aggregator.aggregate(client_scores, metadata=metadata)
+                final_scores = self.detector_aggregator.aggregate(client_scores, metadata=metadata)
                 agg_time = time.time() - t0
 
-                # 7. Remove modelos de clientes com score > 0.6 (threshold)
+                # 7. Remove modelos de clientes com score medio > threshold
+                #    (decisao da DETECCAO e dos agentes estatisticos, sem SLM)
                 removed_ids = []
                 for idx in range(len(self.uploaded_ids) - 1, -1, -1):
                     cid = self.uploaded_ids[idx]
-                    if final_scores.get(cid, 0) > 0.6:
+                    if final_scores.get(cid, 0) > self.score_threshold:
                         print(f"Removing client {cid} (score={final_scores[cid]:.4f})")
                         removed_ids.append(cid)
                         self.set_client_quarantine(cid)
@@ -167,16 +182,43 @@ class ServerMAD(Server):
                         del self.uploaded_weights[idx]
 
                 # Re-normaliza os pesos apos remocao
-                self.uploaded_weights = [
-                    w / sum(self.uploaded_weights) for w in self.uploaded_weights
-                ]
+                if len(self.uploaded_weights) > 0:
+                    total_w = sum(self.uploaded_weights)
+                    if total_w > 1e-8:
+                        self.uploaded_weights = [w / total_w for w in self.uploaded_weights]
+
+                # 7b. AGREGACAO COM SLM: gera os pesos da agregacao (weighted FedAvg)
+                slm_time = 0.0
+                slm_used = False
+                if len(self.uploaded_models) == 0:
+                    # Todos os clientes foram removidos: mantem o modelo global atual
+                    print("[MAD] Todos os clientes removidos nesta ronda; modelo global mantido.")
+                elif self.slm_aggregator is not None:
+                    t0 = time.time()
+                    slm_metadata = dict(metadata)
+                    slm_metadata["default_weights"] = {
+                        cid: w for cid, w in zip(self.uploaded_ids, self.uploaded_weights)
+                    }
+                    slm_weights = self.slm_aggregator.aggregate_weights(
+                        self.uploaded_models, client_scores, metadata=slm_metadata
+                    )
+                    slm_time = time.time() - t0
+                    slm_used = True
+                    self.uploaded_weights = [
+                        slm_weights.get(cid, 1.0 / len(self.uploaded_ids))
+                        for cid in self.uploaded_ids
+                    ]
+                    # Normaliza (seguranca extra)
+                    total = sum(self.uploaded_weights)
+                    if total > 1e-8:
+                        self.uploaded_weights = [w / total for w in self.uploaded_weights]
 
                 # --- Log dos agentes para grafico ---
                 log_entry = {
                     "round": i,
                     "client_ids_uploaded": list(self.uploaded_ids),
                     "agent_scores": {
-                        name: dict(zip(self.uploaded_ids, scores))
+                        name: dict(zip(uploaded_ids_before, scores))
                         for name, scores in agent_scores_by_name.items()
                     },
                     "final_scores": dict(final_scores),
@@ -184,13 +226,21 @@ class ServerMAD(Server):
                     "quarantined_ids": quarantined_ids,
                     "agent_times": agent_times,
                     "agg_time": agg_time,
+                    "slm_time": slm_time,
+                    "slm_used": slm_used,
+                    "slm_weights": {
+                        str(cid): w for cid, w in zip(self.uploaded_ids, self.uploaded_weights)
+                    },
                     "client_embeddings": client_embeddings,
                     "global_embedding": global_embedding,
                 }
                 self.agent_round_log.append(log_entry)
 
-            # 8. Agregacao dos modelos (FedAvg)
-            self.aggregate_parameters()
+            # 8. Agregacao dos modelos (FedAvg / weighted by SLM)
+            if len(self.uploaded_models) > 0:
+                self.aggregate_parameters()
+            else:
+                print("[MAD] Sem modelos validos neste round; modelo global mantido.")
 
             # Logs de desempenho
             self.Budget.append(time.time() - s_t)
@@ -261,6 +311,11 @@ class ServerMAD(Server):
                 "quarantined_ids": [int(c) for c in entry["quarantined_ids"]],
                 "agent_times": {k: float(v) for k, v in entry.get("agent_times", {}).items()},
                 "agg_time": float(entry.get("agg_time", 0.0)),
+                "slm_time": float(entry.get("slm_time", 0.0)),
+                "slm_used": bool(entry.get("slm_used", False)),
+                "slm_weights": {
+                    str(k): float(v) for k, v in entry.get("slm_weights", {}).items()
+                },
                 "client_embeddings": {
                     str(k): [float(x) for x in v] for k, v in entry.get("client_embeddings", {}).items()
                 },

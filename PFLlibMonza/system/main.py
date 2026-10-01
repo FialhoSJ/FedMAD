@@ -369,7 +369,7 @@ def run(args):
         elif args.algorithm == "FedCross":
             server = FedCross(args, i)
 
-        elif args.algorithm == "MAD":
+        elif args.algorithm in ("MAD", "MADStatic"):
             server = ServerMAD(args, i)
 
         else:
@@ -539,6 +539,42 @@ if __name__ == "__main__":
                         help="Max tokens in SLM response per client batch")
     parser.add_argument('-slm_n', '--slm_every_n', type=int, default=1,
                         help="Run SLM every N rounds (1=each, 5=every 5 rounds)")
+
+    # FedMAD adaptive monitoring, risk policy, and candidate validation
+    parser.add_argument('-mad_agents', type=str, default='all',
+                        help="Comma-separated monitoring agents: gradient,similarity,statistical,performance,history")
+    parser.add_argument('-mad_low_threshold', type=float, default=0.35,
+                        help="Upper risk boundary for LOW rounds")
+    parser.add_argument('-mad_high_threshold', type=float, default=0.65,
+                        help="Lower risk boundary for HIGH rounds")
+    parser.add_argument('-mad_ema_current_weight', type=float, default=0.45,
+                        help="Weight of this round's anomaly signal in temporal risk")
+    parser.add_argument('-mad_high_patience', type=int, default=2,
+                        help="Consecutive HIGH client rounds required before quarantine")
+    parser.add_argument('-mad_byzantine_f', type=int, default=1,
+                        help="Expected Byzantine clients for Krum/Bulyan-style defenses")
+    parser.add_argument('-mad_clip_norm', type=float, default=1.0,
+                        help="Maximum L2 norm for clipped client updates")
+    parser.add_argument('-mad_medium_defense', type=str, default='trimmed_mean',
+                        choices=['median', 'trimmed_mean', 'clipping'],
+                        help="First moderate defense attempted at MEDIUM risk")
+    parser.add_argument('-mad_high_order', type=str,
+                        default='bulyan,multi_krum,krum,foolsgold,trimmed_mean,median',
+                        help="Ordered HIGH-risk defense candidates, comma-separated")
+    parser.add_argument('-mad_fixed_defense', type=str, default='trimmed_mean',
+                        choices=['fedavg', 'median', 'trimmed_mean', 'clipping',
+                                 'krum', 'multi_krum', 'bulyan', 'foolsgold'],
+                        help="Fixed aggregation used when -algo MADStatic")
+    parser.add_argument('-mad_validation_clients', type=int, default=3,
+                        help="Number of simulation clients supplying the fixed validation subset; 0 uses all")
+    parser.add_argument('-mad_validation_batches', type=int, default=2,
+                        help="Held-out batches per validation client")
+    parser.add_argument('-mad_validation_loss_tolerance', type=float, default=0.25,
+                        help="Allowed relative loss regression against the last trusted model")
+    parser.add_argument('-mad_validation_accuracy_tolerance', type=float, default=0.10,
+                        help="Allowed absolute accuracy drop against the last trusted model")
+    parser.add_argument('-mad_validation_max_delta', type=float, default=50.0,
+                        help="Maximum L2 distance from the last trusted model")
     args = parser.parse_args()
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id

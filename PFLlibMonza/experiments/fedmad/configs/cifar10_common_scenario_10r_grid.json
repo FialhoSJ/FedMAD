@@ -1,0 +1,12 @@
+{
+  "base_config": "cifar10_common_scenario_10r.json",
+  "output": "cifar10_common_scenario_10r_seed1",
+  "seeds": [1],
+  "attacks": ["sign_flipping"],
+  "methods": [
+    {"name": "fedmad_adaptive", "algorithm": "MAD"},
+    {"name": "fixed_krum", "algorithm": "MADStatic", "fixed_defense": "krum"},
+    {"name": "fixed_trimmed_mean", "algorithm": "MADStatic", "fixed_defense": "trimmed_mean"},
+    {"name": "fedavg", "algorithm": "FedAvg"}
+  ]
+}

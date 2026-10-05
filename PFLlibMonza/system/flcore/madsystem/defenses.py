@@ -25,7 +25,7 @@ def _weighted_coordinate_mean(updates, weights):
     return (updates * weights.view(-1, *([1] * (updates.ndim - 1)))).sum(dim=0)
 
 
-class DefenseAgent:
+class DefenseStrategy:
     name = "defense"
 
     def aggregate(
@@ -63,7 +63,7 @@ class DefenseAgent:
         return candidate
 
 
-class FedAvgDefense(DefenseAgent):
+class FedAvgDefense(DefenseStrategy):
     name = "fedavg"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, **kwargs):
@@ -76,7 +76,7 @@ class FedAvgDefense(DefenseAgent):
         )
 
 
-class CoordinateMedianDefense(DefenseAgent):
+class CoordinateMedianDefense(DefenseStrategy):
     name = "median"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, **kwargs):
@@ -85,7 +85,7 @@ class CoordinateMedianDefense(DefenseAgent):
         )
 
 
-class TrimmedMeanDefense(DefenseAgent):
+class TrimmedMeanDefense(DefenseStrategy):
     name = "trimmed_mean"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, byzantine_f=1, **kwargs):
@@ -100,7 +100,7 @@ class TrimmedMeanDefense(DefenseAgent):
         return self._apply_update(server_model, client_models, reduce)
 
 
-class ClippingDefense(DefenseAgent):
+class ClippingDefense(DefenseStrategy):
     name = "clipping"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, clip_norm=1.0, **kwargs):
@@ -128,7 +128,7 @@ def _krum_scores(vectors, byzantine_f):
     return nearest.sum(dim=1)
 
 
-class KrumDefense(DefenseAgent):
+class KrumDefense(DefenseStrategy):
     name = "krum"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, byzantine_f=1, **kwargs):
@@ -141,7 +141,7 @@ class KrumDefense(DefenseAgent):
         )
 
 
-class MultiKrumDefense(DefenseAgent):
+class MultiKrumDefense(DefenseStrategy):
     name = "multi_krum"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, byzantine_f=1, **kwargs):
@@ -160,7 +160,7 @@ class MultiKrumDefense(DefenseAgent):
         )
 
 
-class BulyanDefense(DefenseAgent):
+class BulyanDefense(DefenseStrategy):
     name = "bulyan"
 
     def aggregate(self, server_model, client_models, weights, client_ids, risk_scores=None, byzantine_f=1, **kwargs):
@@ -200,7 +200,7 @@ class BulyanDefense(DefenseAgent):
         return self._apply_update(server_model, client_models, reduce)
 
 
-class FoolsGoldDefense(DefenseAgent):
+class FoolsGoldDefense(DefenseStrategy):
     name = "foolsgold"
 
     def __init__(self):
@@ -246,7 +246,7 @@ class FoolsGoldDefense(DefenseAgent):
 
 
 def build_defenses():
-    """Create fresh stateful defense agents for one server run."""
+    """Create fresh defense strategies for one server run."""
     return {
         "fedavg": FedAvgDefense(),
         "median": CoordinateMedianDefense(),

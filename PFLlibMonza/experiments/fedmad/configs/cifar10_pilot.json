@@ -1,0 +1,18 @@
+{
+  "dataset": "Cifar10",
+  "model": "CNN",
+  "algorithm": "MAD",
+  "num_clients": 20,
+  "n_client_malicious": 4,
+  "global_rounds": 4,
+  "local_epochs": 1,
+  "atack": "random",
+  "seed": 1,
+  "device": "cpu",
+  "mad_history_alpha": 0.9,
+  "mad_client_threshold": 0.35,
+  "mad_anomaly_threshold": 0.45,
+  "mad_low_threshold": 0.35,
+  "mad_high_threshold": 0.65,
+  "mad_max_defense_attempts": 4
+}

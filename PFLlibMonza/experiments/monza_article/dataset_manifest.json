@@ -1,0 +1,22 @@
+{
+  "source": "MONZA article replication",
+  "num_clients": 100,
+  "dirichlet_alpha": 0.2,
+  "non_iid": true,
+  "balanced": false,
+  "partition": "dir",
+  "datasets": {
+    "MONZA_MNIST_A02": {
+      "path": "dataset/MONZA_MNIST_A02",
+      "config": "dataset/MONZA_MNIST_A02/config.json"
+    },
+    "MONZA_Cifar10_A02": {
+      "path": "dataset/MONZA_Cifar10_A02",
+      "config": "dataset/MONZA_Cifar10_A02/config.json"
+    },
+    "MONZA_Cifar100_A02": {
+      "path": "dataset/MONZA_Cifar100_A02",
+      "config": "dataset/MONZA_Cifar100_A02/config.json"
+    }
+  }
+}

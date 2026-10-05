@@ -1,0 +1,21 @@
+{
+  "dataset": "MONZA_Cifar10_A02",
+  "model": "CNN",
+  "algorithm": "MAD",
+  "num_clients": 100,
+  "n_client_malicious": 20,
+  "join_ratio": 0.2,
+  "random_join_ratio": false,
+  "global_rounds": 1,
+  "local_epochs": 1,
+  "batch_size": 10,
+  "atack": "sign_flipping",
+  "seed": 1,
+  "device": "cpu",
+  "mad_history_alpha": 0.9,
+  "mad_client_threshold": 0.35,
+  "mad_anomaly_threshold": 0.45,
+  "mad_low_threshold": 0.35,
+  "mad_high_threshold": 0.65,
+  "mad_max_defense_attempts": 4
+}

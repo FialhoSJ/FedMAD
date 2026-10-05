@@ -8,25 +8,21 @@ def model_zeros(model, device = 'cpu'):
     # Cria uma cópia profunda do modelo para que o modelo original não seja alterado
     copy_model = copy.deepcopy(model)
     for param in copy_model.parameters():
-        # zera todos os parametros
-        # param.data.zero_()
-        
-        param_ones = torch.ones(size=param.shape)
-        param.data = param_ones.to(device)
+        param.data = torch.zeros_like(param.data, device=device)
 
     return copy_model
 
-def random_param(model, device = 'cpu'):
+def random_param(model, device = 'cpu', generator=None):
     # Cria uma cópia profunda do modelo para que o modelo original não seja alterado
     copy_model = copy.deepcopy(model)
     for param in copy_model.parameters():
         # gera valores aleatorios para serem utilizados como parametros
-        param_random = torch.rand(size=param.shape)
+        param_random = torch.rand(size=param.shape, generator=generator)
         param.data = param_random.to(device)
 
     return copy_model
 
-def shuffle_model(model):
+def shuffle_model(model, generator=None):
     # Cria uma cópia profunda do modelo para que o modelo original não seja alterado
     copy_model = copy.deepcopy(model)
     
@@ -36,14 +32,77 @@ def shuffle_model(model):
         data_flatten = param.data.view(-1)
         
         # Gera uma permutação aleatória dos índices dos elementos
-        index_random = torch.randperm(len(data_flatten))
+        index_random = torch.randperm(len(data_flatten), generator=generator)
         
         # Aplica a permutação ao tensor achatado
-        shuffled_param = data_flatten[index_random]
+        shuffled_param = data_flatten[index_random.to(data_flatten.device)]
         
         # Redimensiona o tensor embaralhado de volta ao formato original
         param.data = shuffled_param.view(param.data.shape)
     
+    return copy_model
+
+
+def gaussian_noise_model(model, snr=1.0, generator=None):
+    """Return a copy with additive Gaussian noise at the requested linear SNR.
+
+    Each tensor's noise power is its signal power divided by ``snr``. An SNR
+    of 1.0 therefore adds Gaussian noise with power equal to the parameter
+    tensor's power.
+    """
+    if snr <= 0:
+        raise ValueError("snr must be greater than zero")
+
+    copy_model = copy.deepcopy(model)
+    with torch.no_grad():
+        for param in copy_model.parameters():
+            signal_power = torch.mean(param.data.float().square())
+            noise_std = torch.sqrt(signal_power / float(snr))
+            noise = torch.randn(
+                tuple(param.shape), generator=generator, dtype=torch.float32
+            ).to(device=param.device, dtype=param.dtype)
+            param.add_(noise * noise_std.to(device=param.device, dtype=param.dtype))
+    return copy_model
+
+
+def scaled_update_model(local_model, reference_model, factor):
+    """Apply a factor to the local *update* relative to the received model.
+
+    factor=-1 is sign flipping; factor>1 is update scaling/model replacement.
+    The function does not alter either input model.
+    """
+    factor = float(factor)
+    if not np.isfinite(factor):
+        raise ValueError("update scale must be finite")
+    result = copy.deepcopy(local_model)
+    reference = reference_model.state_dict()
+    with torch.no_grad():
+        for name, value in result.state_dict().items():
+            if not value.is_floating_point():
+                continue
+            base = reference[name].to(device=value.device, dtype=value.dtype)
+            value.copy_(base + factor * (value - base))
+    return result
+
+
+def shuffle_layer_channels_model(model, generator=None):
+    """Permute output channels/units independently in each Conv/Linear layer.
+
+    The layer's bias follows the same permutation. This models the
+    Shuffled-Layer/channel-order attack while preserving tensor shapes.
+    """
+    copy_model = copy.deepcopy(model)
+    with torch.no_grad():
+        for layer in copy_model.modules():
+            if not isinstance(layer, (nn.Conv1d, nn.Conv2d, nn.Conv3d, nn.Linear)):
+                continue
+            if layer.weight is None or layer.weight.shape[0] < 2:
+                continue
+            permutation = torch.randperm(layer.weight.shape[0], generator=generator)
+            permutation = permutation.to(device=layer.weight.device)
+            layer.weight.copy_(layer.weight.index_select(0, permutation))
+            if layer.bias is not None:
+                layer.bias.copy_(layer.bias.index_select(0, permutation))
     return copy_model
 
 def model_noise(model, SNR, client):

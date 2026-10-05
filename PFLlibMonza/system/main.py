@@ -1,8 +1,11 @@
 #!/usr/bin/env python
 import copy
+import json
 import torch
 import argparse
 import os
+import random
+import re
 import time
 import warnings
 import numpy as np
@@ -376,6 +379,18 @@ def run(args):
             raise NotImplementedError
 
         server.train()
+        if getattr(args, "mad_run_id", ""):
+            # Every matrix method receives the same post-update evaluation.
+            server.evaluate()
+            safe_run_id = re.sub(r"[^A-Za-z0-9_-]", "_", args.mad_run_id)[:80]
+            final_path = os.path.join("..", "results", f"final_eval_{safe_run_id}.json")
+            with open(final_path, "w", encoding="utf-8") as output:
+                json.dump({
+                    "run_id": safe_run_id,
+                    "accuracy": float(server.rs_test_acc[-1]),
+                    "train_loss": float(server.rs_train_loss[-1]),
+                    "evaluation": "after_last_aggregation",
+                }, output, indent=2)
 
         time_list.append(time.time()-start)
 
@@ -397,6 +412,8 @@ if __name__ == "__main__":
     total_start = time.time()
 
     parser = argparse.ArgumentParser()
+    parser.add_argument('--config', type=str, default=None,
+                        help="JSON experiment configuration; explicit CLI flags override it")
     # general
     parser.add_argument('-go', "--goal", type=str, default="test", 
                         help="The goal for this experiment")
@@ -510,7 +527,13 @@ if __name__ == "__main__":
 
     #Mine args
     parser.add_argument('-nmc', "--n_client_malicious", type=int, default=0)
+    parser.add_argument('--seed', type=int, default=0,
+                        help="Random seed for Python, NumPy, and PyTorch")
     parser.add_argument('-atk', '--atack', type = str, default='random')
+    parser.add_argument('--attack_scale', type=float, default=10.0,
+                        help="Update multiplier for scaling/model_replacement attacks")
+    parser.add_argument('--attack_noise_snr', type=float, default=1.0,
+                        help="Linear SNR for gaussian attack")
     parser.add_argument('-ria', '--round_init_atk', type = int, default=0)
     parser.add_argument('-rfake', '--rate_client_fake', type = int, default=1) # de 0 a 1
     parser.add_argument('-cc', '--cluster_comparation', type = int, default=0) # 0 score com modelo global, 1 score com comparação entre clientes, 2 comparação entre clientes e remove todo o cluster , 3 comparação entre clientes com pontuação, 4 entropia do modelo 5 sem nada
@@ -542,7 +565,21 @@ if __name__ == "__main__":
 
     # FedMAD adaptive monitoring, risk policy, and candidate validation
     parser.add_argument('-mad_agents', type=str, default='all',
-                        help="Comma-separated monitoring agents: gradient,similarity,statistical,performance,history")
+                        help="Deprecated legacy option; MAD now uses one Sentinel")
+    parser.add_argument('-mad_history_alpha', type=float, default=0.9,
+                        help="Retention of previous compact client feature EMA")
+    parser.add_argument('-mad_reputation_penalty', type=float, default=0.08)
+    parser.add_argument('-mad_reputation_recovery', type=float, default=0.02)
+    parser.add_argument('-mad_client_threshold', type=float, default=0.35)
+    parser.add_argument('-mad_anomaly_threshold', type=float, default=0.45)
+    parser.add_argument('-mad_max_defense_attempts', type=int, default=4)
+    parser.add_argument('--mad_run_id', type=str, default="",
+                        help="Unique suffix for FedMAD detection logs")
+    parser.add_argument('--mad_ablate_history', action='store_true')
+    parser.add_argument('--mad_ablate_reputation', action='store_true')
+    parser.add_argument('--mad_ablate_temporal', action='store_true')
+    parser.add_argument('--mad_ablate_meta', action='store_true')
+    parser.add_argument('--mad_ablate_validator', action='store_true')
     parser.add_argument('-mad_low_threshold', type=float, default=0.35,
                         help="Upper risk boundary for LOW rounds")
     parser.add_argument('-mad_high_threshold', type=float, default=0.65,
@@ -551,6 +588,10 @@ if __name__ == "__main__":
                         help="Weight of this round's anomaly signal in temporal risk")
     parser.add_argument('-mad_high_patience', type=int, default=2,
                         help="Consecutive HIGH client rounds required before quarantine")
+    parser.add_argument('-mad_filter_medium_risk_updates',
+                        type=lambda x: str(x).lower() in ('1', 'true', 'yes'),
+                        default=True,
+                        help="Try a validation-gated FedAvg candidate using LOW-risk clients before all-client defenses")
     parser.add_argument('-mad_byzantine_f', type=int, default=1,
                         help="Expected Byzantine clients for Krum/Bulyan-style defenses")
     parser.add_argument('-mad_clip_norm', type=float, default=1.0,
@@ -565,8 +606,8 @@ if __name__ == "__main__":
                         choices=['fedavg', 'median', 'trimmed_mean', 'clipping',
                                  'krum', 'multi_krum', 'bulyan', 'foolsgold'],
                         help="Fixed aggregation used when -algo MADStatic")
-    parser.add_argument('-mad_validation_clients', type=int, default=3,
-                        help="Number of simulation clients supplying the fixed validation subset; 0 uses all")
+    parser.add_argument('-mad_validation_clients', type=int, default=12,
+                        help="Number of evenly spaced simulation clients supplying the fixed validation subset; 0 uses all")
     parser.add_argument('-mad_validation_batches', type=int, default=2,
                         help="Held-out batches per validation client")
     parser.add_argument('-mad_validation_loss_tolerance', type=float, default=0.25,
@@ -575,7 +616,24 @@ if __name__ == "__main__":
                         help="Allowed absolute accuracy drop against the last trusted model")
     parser.add_argument('-mad_validation_max_delta', type=float, default=50.0,
                         help="Maximum L2 distance from the last trusted model")
+    preliminary, _ = parser.parse_known_args()
+    if preliminary.config:
+        with open(preliminary.config, encoding="utf-8") as config_file:
+            config_values = json.load(config_file)
+        if not isinstance(config_values, dict):
+            parser.error("config must be a JSON object")
+        allowed = {action.dest for action in parser._actions}
+        unknown = set(config_values) - allowed
+        if unknown:
+            parser.error("unknown config keys: " + ", ".join(sorted(unknown)))
+        parser.set_defaults(**config_values)
     args = parser.parse_args()
+
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
 
     os.environ["CUDA_VISIBLE_DEVICES"] = args.device_id
 

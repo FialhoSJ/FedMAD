@@ -1,25 +1,20 @@
 # FedMAD — Adaptive Multi-Agent Defense for Federated Learning
 
-FedMAD is an experimental framework for defending federated learning against model poisoning. It monitors client updates, keeps temporal client profiles, estimates client and round risk, selects defenses with a rule-based meta-agent, and validates each candidate global model before accepting it.
+FedMAD is an experimental framework for defending federated learning against model poisoning. Its current redesign has two active agents: a Sentinel that audits every round and a rule-based Meta-Agent that chooses defenses. Compact memory, reputation, risk assessment, aggregation, and validation are deterministic modules. The design and migration record are in [docs/FEDMAD_REDESIGN.md](docs/FEDMAD_REDESIGN.md).
 
 The implementation lives in PFLlibMonza (PFLlibMonza/README.md) and extends PFLlib.
 
 ## Adaptive round loop
 
 1. Clients train locally and upload model updates.
-2. Five monitoring agents score the updates:
-   - **Gradient** — update norms and outliers;
-   - **Similarity** — direction agreement between client updates;
-   - **Statistical** — robust outliers in layer and update statistics;
-   - **Performance** — loss impact on held-out client examples;
-   - **History** — change from each client's recent update directions.
-3. Risk assessment combines the agent scores with an exponential temporal profile for each client. An unusual update raises risk, while repeated HIGH risk is required before quarantine.
+2. The **FedMAD Sentinel** extracts magnitude, direction, population distance, and temporal deviation from client updates, then produces an anomaly score.
+3. Compact per-client memory updates EMA features and reputation. The risk engine estimates client and round risk. Repeated suspicious behavior is required before quarantine.
 4. The rule-based meta-agent chooses an ordered defense policy:
    - **LOW** — FedAvg;
    - **MEDIUM** — Trimmed Mean, coordinate Median, or update clipping;
-   - **HIGH** — Bulyan, Multi-Krum, Krum, FoolsGold, and robust mean candidates.
+   - **HIGH or isolated strong outliers** — Multi-Krum, Krum, trimmed mean, median, and other feasible candidates.
 5. The global validator checks candidate parameters and held-out loss/accuracy. If a candidate fails, the meta-agent tries another defense. If all candidates fail, FedMAD restores the last trusted model.
-6. Round decisions and per-agent scores are saved as JSON under PFLlibMonza/results/.
+6. Round decisions, Sentinel signals, reputation, risk, active attack labels, and defense attempts are saved as JSON under PFLlibMonza/results/.
 
 ## Run FedMAD
 
@@ -36,7 +31,23 @@ Risk boundaries, temporal smoothing, defense order, Byzantine estimate, and vali
 python main.py -data Cifar10 -m CNN -algo MAD -nc 20 -gr 200 -nmc 2 -mad_byzantine_f 2 -mad_validation_clients 5
 ```
 
-Use -mad_agents all to enable all five monitors, or pass a comma-separated subset such as -mad_agents gradient,similarity,history.
+The former `-mad_agents` setting is deprecated in MAD mode. The Sentinel always runs. `-mad_history_alpha`, `-mad_reputation_penalty`, `-mad_reputation_recovery`, and `-mad_max_defense_attempts` control the compact memory and decision loop.
+
+For a JSON-controlled pilot, run from `PFLlibMonza/system`:
+
+```bash
+python main.py --config ../experiments/fedmad/configs/cifar10_pilot.json
+```
+
+An explicit CLI flag overrides the matching JSON value. The pilot needs the dataset prepared locally.
+
+To inspect the planned comparison grid without running its 135 jobs:
+
+```bash
+python PFLlibMonza/experiments/fedmad/run_matrix.py PFLlibMonza/experiments/fedmad/configs/pilot_grid.json --dry-run
+```
+
+The single-run smoke grid is `smoke_grid.json`. The runner writes a manifest and unique logs under `PFLlibMonza/results/`; `analyze_results.py` summarizes completed seeds as mean and standard deviation. It evaluates all methods once after their last aggregation so the reported final accuracy is for the final model.
 
 ## Research comparisons
 
@@ -52,7 +63,7 @@ For example, run a fixed Trimmed Mean baseline with:
 python main.py -data Cifar10 -m CNN -algo MADStatic -mad_fixed_defense trimmed_mean -nc 20 -gr 200 -nmc 2 -atk random
 ```
 
-In adaptive MAD mode, the per-round detection log records agent scores, raw anomaly scores, temporally smoothed client risks, risk level, defense attempts, validation outcomes, quarantine, rollback, monitor/aggregation time, and estimated upload/download bytes. Static runs record the fixed defense and communication/time estimates. These logs support analysis of accuracy, attack success, detection quality, and defense cost.
+In adaptive MAD mode, the per-round log records four Sentinel signals, raw anomaly scores, reputation, client and round risk, decision reason, defense attempts, validation outcomes, quarantine, rollback, active attack ground truth, detection counts, time, and estimated upload/download bytes. Static runs record the fixed defense and communication/time estimates. Long benchmarks and ablations described in the redesign document remain experimental work; no comparative claim is implied by these logs alone.
 
 ## Validation data
 

@@ -1,0 +1,11 @@
+{
+  "base_config": "mnist_smoke.json",
+  "output": "fedmad_redesign_smoke",
+  "seeds": [17],
+  "attacks": ["sign_flipping"],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "fixed_krum", "algorithm": "MADStatic", "fixed_defense": "krum"},
+    {"name": "fedavg", "algorithm": "FedAvg"}
+  ]
+}

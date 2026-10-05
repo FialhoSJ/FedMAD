@@ -1,0 +1,16 @@
+{
+  "dataset": "MNIST",
+  "model": "CNN",
+  "algorithm": "MAD",
+  "num_clients": 5,
+  "n_client_malicious": 1,
+  "global_rounds": 1,
+  "local_epochs": 1,
+  "rate_client_fake": 1.0,
+  "round_init_atk": -1,
+  "cluster_comparation": 99,
+  "device": "cpu",
+  "times": 1,
+  "mad_validation_clients": 5,
+  "mad_max_defense_attempts": 4
+}

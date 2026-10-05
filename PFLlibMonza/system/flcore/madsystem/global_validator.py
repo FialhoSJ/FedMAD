@@ -10,12 +10,13 @@ class GlobalValidator:
     def __init__(self, clients, args, device):
         self.device = torch.device(device)
         self.batch_limit = max(1, int(getattr(args, "mad_validation_batches", 2)))
-        self.client_limit = max(0, int(getattr(args, "mad_validation_clients", 3)))
+        self.client_limit = max(0, int(getattr(args, "mad_validation_clients", 12)))
         self.loss_tolerance = max(0.0, float(getattr(args, "mad_validation_loss_tolerance", 0.25)))
         self.accuracy_tolerance = max(0.0, float(getattr(args, "mad_validation_accuracy_tolerance", 0.10)))
         self.max_delta_norm = float(getattr(args, "mad_validation_max_delta", 50.0))
-        count = self.client_limit or len(clients)
-        self.validation_clients = list(clients[:count])
+        ordered_clients = sorted(clients, key=lambda client: getattr(client, "id", 0))
+        count = self.client_limit or len(ordered_clients)
+        self.validation_clients = self._representative_clients(ordered_clients, count)
         self.client_batches = {}
         self.validation_batches = []
         for client in self.validation_clients:
@@ -24,6 +25,19 @@ class GlobalValidator:
             if batches:
                 self.validation_batches.extend(batches)
         self.trusted_metrics = None
+
+    @staticmethod
+    def _representative_clients(clients, count):
+        """Pick a deterministic, evenly spaced subset across client IDs."""
+        if count <= 0 or count >= len(clients):
+            return list(clients)
+        if count == 1:
+            return [clients[(len(clients) - 1) // 2]]
+        last_index = len(clients) - 1
+        return [
+            clients[round(index * last_index / (count - 1))]
+            for index in range(count)
+        ]
 
     def capture_batches(self, client):
         """Capture a small, fixed local test subset for repeatable candidate checks."""

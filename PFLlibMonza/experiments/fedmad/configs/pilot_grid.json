@@ -1,0 +1,17 @@
+{
+  "base_config": "cifar10_pilot.json",
+  "output": "fedmad_redesign_pilot",
+  "seeds": [1, 2, 3, 4, 5],
+  "attacks": ["gaussian", "sign_flipping", "label"],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "fedmad_no_history", "algorithm": "MAD", "ablation": "history"},
+    {"name": "fedmad_no_reputation", "algorithm": "MAD", "ablation": "reputation"},
+    {"name": "fedmad_no_temporal", "algorithm": "MAD", "ablation": "temporal"},
+    {"name": "fedmad_no_meta", "algorithm": "MAD", "ablation": "meta", "fixed_defense": "trimmed_mean"},
+    {"name": "fedmad_no_validator", "algorithm": "MAD", "ablation": "validator"},
+    {"name": "fixed_krum", "algorithm": "MADStatic", "fixed_defense": "krum"},
+    {"name": "fixed_trimmed_mean", "algorithm": "MADStatic", "fixed_defense": "trimmed_mean"},
+    {"name": "fedavg", "algorithm": "FedAvg"}
+  ]
+}

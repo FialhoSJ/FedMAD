@@ -1,0 +1,14 @@
+{
+  "base_config": "v2_base.json", "output": "fedmad_v2_noniid",
+  "seeds": [1, 2, 3, 4, 5], "distributions": ["iid", 1.0, 0.5, 0.1], "rounds": 150,
+  "attacks": ["clean", "sign_flipping"],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "fedavg", "algorithm": "FedAvg"},
+    {"name": "fixed_krum", "algorithm": "MADStatic", "fixed_defense": "krum"},
+    {"name": "fixed_multi_krum", "algorithm": "MADStatic", "fixed_defense": "multi_krum"},
+    {"name": "fixed_median", "algorithm": "MADStatic", "fixed_defense": "median"},
+    {"name": "fixed_trimmed_mean", "algorithm": "MADStatic", "fixed_defense": "trimmed_mean"},
+    {"name": "monza", "algorithm": "FedAvg"}
+  ]
+}

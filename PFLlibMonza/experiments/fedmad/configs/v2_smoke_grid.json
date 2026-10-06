@@ -1,0 +1,14 @@
+{
+  "base_config": "v2_base.json",
+  "output": "fedmad_v2_smoke",
+  "seeds": [1], "distributions": ["iid"], "rounds": 6,
+  "clients": 5, "max_examples": 1000, "malicious_fraction": 0.2,
+  "attack_start_round": 4,
+  "attacks": ["sign_flipping"],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "fixed_krum", "algorithm": "MADStatic", "fixed_defense": "krum"},
+    {"name": "fedavg", "algorithm": "FedAvg"},
+    {"name": "monza", "algorithm": "FedAvg"}
+  ]
+}

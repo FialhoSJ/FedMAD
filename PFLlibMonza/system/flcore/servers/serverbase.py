@@ -115,6 +115,13 @@ class Server(object):
 
     def select_clients(self):
         self.current_round += 1
+        if getattr(self.args, "mad_deterministic", False):
+            rng = random.Random(self.args.seed * 1000003 + self.current_round * 100003)
+            count = max(1, int(self.num_clients * self.join_ratio))
+            self.planned_client_ids = rng.sample(list(range(self.num_clients)), min(count, self.num_clients))
+            selected = [self.clients[cid] for cid in self.planned_client_ids if self.client_quarantine_dict[cid]['roundsQuarent'] == 0]
+            self.current_num_join_clients = len(selected)
+            return selected
         if self.random_join_ratio:
             self.current_num_join_clients = np.random.choice(range(self.num_join_clients, self.num_clients+1), 1, replace=False)[0]
         else:
@@ -140,6 +147,9 @@ class Server(object):
             start_time = time.time()
             
             client.set_parameters(self.global_model)
+            if getattr(self.args, "mad_deterministic", False) or getattr(self.args, "mad_version", "v1") == "v2":
+                client._mad_round = self.current_round
+                client._mad_loader_calls = 0
 
             client.send_time_cost['num_rounds'] += 1
             client.send_time_cost['total_cost'] += 2 * (time.time() - start_time)
@@ -147,7 +157,8 @@ class Server(object):
     def receive_models(self):
         assert (len(self.selected_clients) > 0)
 
-        active_clients = random.sample(
+        sample_rng = random.Random(self.args.seed * 1000003 + self.current_round * 100003 + 17) if getattr(self.args, "mad_deterministic", False) else random
+        active_clients = sample_rng.sample(
             self.selected_clients, int((1-self.client_drop_rate) * self.current_num_join_clients))
 
         self.uploaded_ids = []

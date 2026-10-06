@@ -12,7 +12,7 @@ class ClientMAD(clientAVG):
         self.encoder = None
         self.ssl_epochs = args.ssl_epochs if hasattr(args, 'ssl_epochs') else 0
         ssl_pd = args.ssl_proj_dim if hasattr(args, 'ssl_proj_dim') else 128
-        if ssl_pd > 0:
+        if ssl_pd > 0 and (getattr(args, "mad_version", "v1") == "v1" or self.ssl_epochs > 0):
             enc_dim = 1600 if "Cifar10" in args.dataset else 1024
             self.projection = nn.Sequential(
                 nn.Linear(enc_dim, enc_dim // 2),

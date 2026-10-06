@@ -1,19 +1,25 @@
 import copy
+import csv
 import json
 import os
 import re
 import time
 from threading import Thread
+from concurrent.futures import ThreadPoolExecutor
+
+import torch
 
 import torch.nn as nn
 
 from flcore.clients.clientmad import ClientMAD
 from flcore.madsystem.defenses import build_defenses
 from flcore.madsystem.global_validator import GlobalValidator
-from flcore.madsystem.memory import MemoryManager
+from flcore.madsystem.memory import MemoryManager, HistoryAwareMemory
 from flcore.madsystem.meta_agent import RuleBasedMetaAgent
-from flcore.madsystem.risk import RiskEngine
-from flcore.madsystem.sentinel import FedMADSentinel
+from flcore.madsystem.risk import RiskEngine, HistoryAwareRiskEngine
+from flcore.madsystem.sentinel import FedMADSentinel, HistoryAwareSentinel
+from flcore.madsystem.evaluation import ExperimentEvaluator
+from flcore.madsystem.resources import process_memory
 from flcore.servers.serverbase import Server
 from flcore.trainmodel.models import FedAvgCNN
 
@@ -26,6 +32,7 @@ class ServerMAD(Server):
         self.set_slow_clients()
         self.set_clients(ClientMAD)
         self.static_mode = args.algorithm == "MADStatic"
+        self.v2 = getattr(args, "mad_version", "v1") == "v2"
         self.fixed_defense = getattr(args, "mad_fixed_defense", "trimmed_mean")
         self.run_id = re.sub(r"[^A-Za-z0-9_-]", "_", str(getattr(args, "mad_run_id", "")))[:80]
         self.ablate_history = bool(getattr(args, "mad_ablate_history", False))
@@ -33,6 +40,10 @@ class ServerMAD(Server):
         self.ablate_temporal = bool(getattr(args, "mad_ablate_temporal", False))
         self.ablate_meta = bool(getattr(args, "mad_ablate_meta", False))
         self.ablate_validator = bool(getattr(args, "mad_ablate_validator", False))
+        self.ablate_population = bool(getattr(args, "mad_ablate_population", False))
+        if self.v2 and not getattr(args, "mad_validator_enabled", True):
+            self.ablate_validator = True
+        self.evaluator = ExperimentEvaluator(self.index_malicious)
 
         # Build the extra encoder only when the optional local SSL path is active.
         self.encoder = (
@@ -58,10 +69,26 @@ class ServerMAD(Server):
             use_reputation=not (self.ablate_history or self.ablate_reputation),
             use_temporal=not (self.ablate_history or self.ablate_temporal),
         )
+        if self.v2:
+            self.sentinel = HistoryAwareSentinel(
+                getattr(args, "mad_anomaly_weights", None), getattr(args, "mad_population_floor", 0.15),
+                getattr(args, "mad_cold_start_factor", 0.5), getattr(args, "mad_history_min_observations", 3),
+                getattr(args, "mad_history_sensitivity", 3.0), not self.ablate_population,
+            )
+            self.memory = HistoryAwareMemory(
+                getattr(args, "mad_history_alpha", 0.9), getattr(args, "mad_reputation_penalty", 0.08),
+                getattr(args, "mad_reputation_recovery", 0.02), getattr(args, "mad_anomaly_threshold", 0.45),
+                getattr(args, "mad_persistence_window", 5), getattr(args, "mad_reputation_initial", 1.0),
+                getattr(args, "mad_suspicious_profile_weight", 0.1),
+            )
+            self.risk_engine = HistoryAwareRiskEngine(args, not (self.ablate_history or self.ablate_reputation), not (self.ablate_history or self.ablate_temporal))
         self.agent_names = [] if self.static_mode else ["FedMAD Sentinel"]
+        if self.v2 and not self.static_mode:
+            self.agent_names.append("FedMAD Meta-Defense")
         self.feature_names = self.sentinel.feature_names
         self.meta_agent = RuleBasedMetaAgent(args)
-        self.defense_agents = build_defenses()
+        self.defense_agents = build_defenses("v2" if self.v2 else "v1")
+        self.defense_pool = self.defense_agents  # Compatibility alias; strategies are not agents.
         self.validator = GlobalValidator(self.clients, args, self.device)
         self.trusted_model = copy.deepcopy(self.global_model)
         self.detection_log = []
@@ -72,6 +99,11 @@ class ServerMAD(Server):
         )
         self.clip_norm = max(1e-8, float(getattr(args, "mad_clip_norm", 1.0)))
         self.max_defense_attempts = max(1, int(getattr(args, "mad_max_defense_attempts", 4)))
+        self.quarantine_rounds = max(0, int(getattr(args, "mad_quarantine_rounds", 0)))
+        self.evaluation_every = max(1, int(getattr(args, "mad_evaluation_every", 1)))
+        self.last_monitoring_timings = {}
+        if self.v2:
+            self._initialize_v2_logs()
 
         print(f"[FedMAD] Monitoring agent: {', '.join(self.agent_names) or 'none (static)'}")
         if self.static_mode:
@@ -101,6 +133,9 @@ class ServerMAD(Server):
         if client_id not in self.client_quarantine_dict:
             return
         state = self.client_quarantine_dict[client_id]
+        if self.v2:
+            state["roundsQuarent"] = self.quarantine_rounds
+            return
         state["quarentena"] += 1
         state["roundsQuarent"] = state["quarentena"] * 2
 
@@ -123,30 +158,37 @@ class ServerMAD(Server):
         return impacts
 
     def _monitor_updates(self, round_number):
-        prior_memory = self.memory if not self.ablate_history else MemoryManager(
+        prior_memory = self.memory if not self.ablate_history else (HistoryAwareMemory() if self.v2 else MemoryManager(
             alpha=self.memory.alpha, penalty=self.memory.penalty,
             recovery=self.memory.recovery,
             suspicious_threshold=self.memory.suspicious_threshold,
-        )
+        ))
+        sentinel_start = time.perf_counter()
         observations = self.sentinel.inspect(
             self.uploaded_ids, self.uploaded_models, self.global_model, prior_memory,
             use_temporal=not (self.ablate_history or self.ablate_temporal),
         )
-        assessment = self.risk_engine.assess(observations, prior_memory)
+        sentinel_seconds = time.perf_counter() - sentinel_start
+        risk_start = time.perf_counter()
+        assessment = self.risk_engine.assess(observations, self.memory, round_number) if self.v2 else self.risk_engine.assess(observations, prior_memory)
         for cid, row in observations.items():
+            extra = {"suspicious": assessment["clients"][cid]["suspicious_evidence"],
+                     "current_state": assessment["clients"][cid]["state"],
+                     "use_reputation": not (self.ablate_history or self.ablate_reputation)} if self.v2 else {}
             state = self.memory.update(
                 cid, row["features"], row["anomaly"],
-                assessment["clients"][cid]["risk"], round_number,
+                assessment["clients"][cid]["risk"], round_number, **extra,
             )
             assessment["clients"][cid].update({
                 "reputation": state.reputation,
                 "observations": state.observations,
                 "alerts": state.total_suspicious_rounds,
             })
+        self.last_monitoring_timings = {"sentinel_seconds": sentinel_seconds, "memory_risk_seconds": time.perf_counter() - risk_start}
         return observations, assessment
 
     def _adjusted_weights(self, assessment):
-        if assessment["round_level"] == "LOW":
+        if assessment["round_level"] == "LOW" or (getattr(self, "v2", False) and self.ablate_meta):
             return list(self.uploaded_weights)
         weights = []
         for cid, weight in zip(self.uploaded_ids, self.uploaded_weights):
@@ -183,6 +225,8 @@ class ServerMAD(Server):
     def _risk_adjusted_byzantine_f(self, assessment):
         """Raise the configured f floor as active clients show stronger risk."""
         count = len(self.uploaded_models)
+        if getattr(self, "v2", False) and self.ablate_meta:
+            return self.byzantine_f
         if count <= 1:
             return 0
         levels = [
@@ -217,11 +261,16 @@ class ServerMAD(Server):
     def _aggregate_and_validate(self, assessment):
         attempted = []
         outcomes = []
+        selection_start = time.perf_counter()
         if self.ablate_meta:
             candidates = [self.fixed_defense]
             self.meta_agent.last_reason = "fixed_defense_ablation"
+        elif getattr(self, "v2", False) and assessment["round_level"] == "LOW" and not assessment.get("fraction_anomalous", 0) and assessment.get("max_risk", 0) < self.risk_engine.client_threshold:
+            candidates = ["fedavg"]
+            self.meta_agent.last_reason = "low_effective_risk_meta_inactive"
         else:
             candidates = self.meta_agent.select_defenses(assessment)
+        self.last_meta_seconds = time.perf_counter() - selection_start
         risk_filtered_indices = [] if self.ablate_meta else self._risk_filtered_indices(assessment)
         if risk_filtered_indices:
             candidates.insert(0, "risk_filtered_fedavg")
@@ -257,6 +306,7 @@ class ServerMAD(Server):
                 client_id: assessment["clients"].get(client_id, {}).get("risk", 0.0)
                 for client_id in candidate_ids
             }
+            aggregation_start = time.perf_counter()
             candidate = defense.aggregate(
                 server_model=self.global_model,
                 client_models=candidate_models,
@@ -266,6 +316,8 @@ class ServerMAD(Server):
                 byzantine_f=effective_f,
                 clip_norm=self.clip_norm,
             )
+            aggregation_seconds = time.perf_counter() - aggregation_start
+            validation_start = time.perf_counter()
             if self.ablate_validator:
                 accepted, reason, metrics = True, "validator_disabled_ablation", {}
             else:
@@ -281,6 +333,8 @@ class ServerMAD(Server):
                 "accepted": bool(accepted),
                 "reason": reason,
                 "validation": metrics,
+                "aggregation_seconds": aggregation_seconds,
+                "validation_seconds": time.perf_counter() - validation_start,
             })
             print(
                 f"[FedMAD] {assessment['round_level']} risk: "
@@ -298,9 +352,14 @@ class ServerMAD(Server):
                 chosen_name = defense_name if is_risk_filtered else applied_name
                 return chosen_name, outcomes, False, effective_f
             if not self.ablate_meta:
-                candidates.extend(
+                fallback_start = time.perf_counter()
+                if getattr(self, "v2", False) and self.meta_agent.last_reason == "low_effective_risk_meta_inactive":
+                    candidates.extend(self.meta_agent.select_defenses(assessment))
+                else:
+                    candidates.extend(
                     self.meta_agent.fallback_defenses(assessment["round_level"], attempted + candidates)
-                )
+                    )
+                self.last_meta_seconds += time.perf_counter() - fallback_start
 
         self.global_model = copy.deepcopy(self.trusted_model)
         return None, outcomes, True, effective_f
@@ -318,6 +377,47 @@ class ServerMAD(Server):
         with open(log_path, "w", encoding="utf-8") as output:
             json.dump(self.detection_log, output, indent=2)
         print(f"Detection log saved -> {log_path}")
+        if self.v2:
+            summary = self.evaluator.summary()
+            totals = {key: sum(item.get("detection", {}).get(key, 0) for item in self.detection_log) for key in ("tp", "fp", "tn", "fn")}
+            summary.update(totals)
+            summary["peak_memory_bytes"] = process_memory()["peak_memory_bytes"]
+            summary["sentinel_seconds"] = sum(row.get("sentinel_seconds", 0) for row in self.detection_log)
+            summary["monitoring_seconds"] = sum(row.get("monitoring_seconds", 0) for row in self.detection_log)
+            summary["round_seconds"] = sum(self.Budget)
+            with open(log_path.replace("detection_log_", "evaluation_") , "w", encoding="utf-8") as output:
+                json.dump(summary, output, indent=2)
+
+    def _initialize_v2_logs(self):
+        result_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "results"))
+        os.makedirs(result_dir, exist_ok=True)
+        prefix = f"detection_log_{self.dataset}_{self.algorithm}_cc{self.cc}{'_' + self.run_id if self.run_id else ''}"
+        self.round_jsonl = os.path.join(result_dir, prefix + ".jsonl")
+        self.client_csv = os.path.join(result_dir, prefix + "_clients.csv")
+        self.client_log_columns = ["round", "client_id", "population_deviation", "historical_deviation", "anomaly", "population_anomaly", "population_gate", "reputation", "risk", "state", "persistence", "suspicious_in_window", "round_risk", "chosen_defense", "validator"]
+        with open(self.round_jsonl, "w", encoding="utf-8"):
+            pass
+        with open(self.client_csv, "w", newline="", encoding="utf-8") as output:
+            csv.DictWriter(output, self.client_log_columns).writeheader()
+
+    def _append_v2_logs(self, round_log):
+        with open(self.round_jsonl, "a", encoding="utf-8") as output:
+            output.write(json.dumps(round_log) + "\n")
+        with open(self.client_csv, "a", newline="", encoding="utf-8") as output:
+            writer = csv.DictWriter(output, self.client_log_columns)
+            for cid in round_log["client_ids"]:
+                key = str(cid)
+                features = round_log["sentinel_features"].get(key, {})
+                history = round_log["client_history"].get(key, {})
+                evidence = round_log.get("sentinel_evidence", {}).get(key, {})
+                writer.writerow({"round": round_log["round"], "client_id": cid,
+                                 "population_deviation": features.get("distance"), "historical_deviation": features.get("temporal"),
+                                 "anomaly": round_log["final_scores"].get(key), "population_anomaly": evidence.get("population_anomaly"),
+                                 "population_gate": evidence.get("population_gate"), "reputation": round_log["client_reputations"].get(key),
+                                 "risk": round_log["client_risks"].get(key), "state": round_log.get("client_states", {}).get(key),
+                                 "persistence": history.get("persistence"), "suspicious_in_window": history.get("suspicious_in_window"),
+                                 "round_risk": round_log["round_risk"], "chosen_defense": round_log["chosen_defense"],
+                                 "validator": "ROLLBACK" if round_log["rollback"] else "ACCEPT"})
 
     def train(self):
         for round_number in range(self.global_rounds + 1):
@@ -328,16 +428,25 @@ class ServerMAD(Server):
             if round_number % self.eval_gap == 0:
                 print(f"\n-------------Round number: {round_number}-------------")
                 print("\nEvaluate global model")
-                self.evaluate()
+                if not self.v2:
+                    self.evaluate()
 
             for client_id in range(self.num_clients):
                 self.decrease_quarentine(client_id)
 
-            threads = [Thread(target=client.train) for client in self.selected_clients]
-            for thread in threads:
-                thread.start()
-            for thread in threads:
-                thread.join()
+            if self.v2 and getattr(self.args, "mad_deterministic", False):
+                for client in self.selected_clients:
+                    torch.manual_seed(self.args.seed * 1000003 + round_number * 100003 + client.id * 1009)
+                    client.train()
+            elif self.v2:
+                with ThreadPoolExecutor(max_workers=max(1, len(self.selected_clients))) as pool:
+                    list(pool.map(lambda client: client.train(), self.selected_clients))
+            else:
+                threads = [Thread(target=client.train) for client in self.selected_clients]
+                for thread in threads:
+                    thread.start()
+                for thread in threads:
+                    thread.join()
 
             if self.selected_clients:
                 self.receive_models()
@@ -352,18 +461,14 @@ class ServerMAD(Server):
                     "history": self.ablate_history,
                     "reputation": self.ablate_reputation,
                     "temporal": self.ablate_temporal,
+                    "population": self.ablate_population,
                     "meta": self.ablate_meta,
                     "validator": self.ablate_validator,
                 },
                 "agent_names": self.agent_names,
                 "client_ids": list(self.uploaded_ids),
-                "malicious_ground_truth": [
-                    int(cid in self.index_malicious) for cid in self.uploaded_ids
-                ],
-                "active_attack_ground_truth": [
-                    int(bool(getattr(self.clients[cid], "is_malicious", False)))
-                    for cid in self.uploaded_ids
-                ],
+                "malicious_ground_truth": [],
+                "active_attack_ground_truth": [],
                 "per_agent_scores": {},
                 "final_scores": {},
                 "client_risks": {},
@@ -427,10 +532,12 @@ class ServerMAD(Server):
                 round_log["aggregation_validation_seconds"] = (
                     time.time() - aggregation_start
                 )
+                round_log["meta_seconds"] = 0.0
             elif self.uploaded_models:
                 monitoring_start = time.time()
                 observations, assessment = self._monitor_updates(round_number)
                 round_log["monitoring_seconds"] = time.time() - monitoring_start
+                round_log.update(self.last_monitoring_timings)
                 round_log["final_scores"] = {
                     str(cid): float(assessment["raw_scores"].get(cid, 0.0))
                     for cid in self.uploaded_ids
@@ -462,30 +569,18 @@ class ServerMAD(Server):
                     for cid, details in assessment["clients"].items()
                 }
                 round_log["sentinel_features"] = {
-                    str(cid): observations[cid]["features"] for cid in self.uploaded_ids
+                    str(cid): {name: value for name, value in observations[cid]["features"].items() if not name.startswith("_")} for cid in self.uploaded_ids
                 }
                 round_log["per_agent_scores"]["FedMAD Sentinel"] = {
                     str(cid): observations[cid]["signals"] for cid in self.uploaded_ids
                 }
-                truth = round_log["active_attack_ground_truth"]
-                predicted = [
-                    int(assessment["clients"][cid]["risk"] >= self.risk_engine.client_threshold)
-                    for cid in self.uploaded_ids
-                ]
-                tp = sum(p and y for p, y in zip(predicted, truth))
-                fp = sum(p and not y for p, y in zip(predicted, truth))
-                fn = sum(not p and y for p, y in zip(predicted, truth))
-                tn = sum(not p and not y for p, y in zip(predicted, truth))
-                precision = tp / (tp + fp) if tp + fp else 0.0
-                recall = tp / (tp + fn) if tp + fn else 0.0
-                round_log["detection"] = {
-                    "tp": tp, "fp": fp, "fn": fn, "tn": tn,
-                    "precision": precision,
-                    "recall": recall,
-                    "f1": 2 * precision * recall / (precision + recall) if precision + recall else 0.0,
-                    "fpr": fp / (fp + tn) if fp + tn else 0.0,
-                    "fnr": fn / (fn + tp) if fn + tp else 0.0,
-                }
+                if self.v2:
+                    round_log["client_states"] = {str(cid): details["state"] for cid, details in assessment["clients"].items()}
+                    round_log["client_risk_components"] = {str(cid): details["risk_components"] for cid, details in assessment["clients"].items()}
+                    round_log["sentinel_evidence"] = {str(cid): {key: observations[cid][key] for key in ("population_anomaly", "population_gate", "history_mature", "invalid_update")} for cid in self.uploaded_ids}
+                    for cid, details in assessment["clients"].items():
+                        round_log["client_history"][str(cid)].update({key: details[key] for key in ("persistence", "suspicious_in_window")})
+                    round_log["round_risk_components"].update({key: assessment[key] for key in ("risk_variance", "high_risk_count")})
 
                 aggregation_start = time.time()
                 chosen, outcomes, rolled_back, effective_f = self._aggregate_and_validate(assessment)
@@ -493,6 +588,7 @@ class ServerMAD(Server):
                     time.time() - aggregation_start
                 )
                 round_log["chosen_defense"] = chosen
+                round_log["meta_seconds"] = self.last_meta_seconds
                 round_log["meta_decision_reason"] = self.meta_agent.last_reason
                 round_log["effective_byzantine_f"] = effective_f
                 round_log["defense_attempts"] = outcomes
@@ -503,6 +599,7 @@ class ServerMAD(Server):
                 for cid, details in assessment["clients"].items():
                     if (
                         details["confirmed"]
+                        and (not self.v2 or self.quarantine_rounds > 0)
                         and self.client_quarantine_dict[cid]["roundsQuarent"] == 0
                     ):
                         self.set_client_quarantine(cid)
@@ -519,6 +616,21 @@ class ServerMAD(Server):
                 round_log["chosen_defense"]
                 and round_log["chosen_defense"] not in ("fedavg", "risk_filtered_fedavg")
             )
+            if self.v2:
+                round_log["planned_client_ids"] = getattr(self, "planned_client_ids", [client.id for client in self.selected_clients])
+                round_log["robust_defense_activated"] = any(outcome["defense"] != "fedavg" for outcome in round_log["defense_attempts"])
+                round_log["mad_version"] = "v2"
+                round_log["meta_activations"] = self.meta_agent.activations
+                if round_number % self.evaluation_every == 0 or round_number == self.global_rounds:
+                    self.evaluate()
+                    round_log["global_metrics"] = self.latest_global_metrics
+            predicted = [
+                int(round_log.get("client_states", {}).get(str(cid)) == "DEFENSE") if self.v2 else
+                int(round_log["client_risks"].get(str(cid), 0.0) >= self.risk_engine.client_threshold)
+                for cid in self.uploaded_ids
+            ]
+            risk_predictions = [int(round_log["client_risks"].get(str(cid), 0) >= self.risk_engine.client_threshold) for cid in self.uploaded_ids] if self.v2 and not self.static_mode else None
+            round_log.update(self.evaluator.record_server_round(round_number, self.uploaded_ids, predicted, self.clients, round_log["robust_defense_activated"], risk_predictions))
             eligible_rounds = sum(bool(item["client_ids"]) for item in self.detection_log) + bool(round_log["client_ids"])
             activated_rounds = sum(bool(item.get("robust_defense_activated")) for item in self.detection_log) + round_log["robust_defense_activated"]
             round_log["defense_activation_rate_so_far"] = (
@@ -528,6 +640,10 @@ class ServerMAD(Server):
 
             self.Budget.append(time.time() - start_time)
             round_log["round_seconds"] = self.Budget[-1]
+            if self.v2:
+                round_log.update(process_memory())
+                round_log["sentinel_overhead"] = round_log.get("sentinel_seconds", 0) / max(round_log["round_seconds"], 1e-12)
+                self._append_v2_logs(round_log)
             print("-" * 25, "time cost", "-" * 25, self.Budget[-1])
             if self.auto_break and self.check_done(
                 acc_lss=[self.rs_test_acc], top_cnt=self.top_cnt

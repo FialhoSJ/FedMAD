@@ -20,6 +20,10 @@ class Client(object):
         self.dataset = args.dataset
         self.device = args.device
         self.id = id  # integer
+        self.mad_deterministic = bool(getattr(args, "mad_deterministic", False))
+        self.mad_seed = int(getattr(args, "seed", 0))
+        self._mad_round = -1
+        self._mad_loader_calls = 0
         self.save_folder_name = args.save_folder_name
 
         self.num_classes = args.num_classes
@@ -58,7 +62,11 @@ class Client(object):
             train_data = read_client_data(self.dataset, self.id, is_train=True, few_shot=self.few_shot, is_malicious=True)
         else:
             train_data = read_client_data(self.dataset, self.id, is_train=True, few_shot=self.few_shot, is_malicious=False)
-        return DataLoader(train_data, batch_size, drop_last=True, shuffle=True)
+        generator = None
+        if self.mad_deterministic:
+            generator = torch.Generator().manual_seed((self.mad_seed * 1000003 + (self._mad_round + 1) * 100003 + self.id * 1009 + self._mad_loader_calls) % (2**63 - 1))
+            self._mad_loader_calls += 1
+        return DataLoader(train_data, batch_size, drop_last=True, shuffle=True, generator=generator)
 
     def load_test_data(self, batch_size=None):
         if batch_size == None:

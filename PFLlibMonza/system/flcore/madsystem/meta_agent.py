@@ -11,7 +11,16 @@ class RuleBasedMetaAgent:
     )
 
     def __init__(self, args):
+        self.v2 = getattr(args, "mad_version", "v1") == "v2"
+        self.isolated_fraction = float(getattr(args, "mad_isolated_fraction", 0.25))
+        self.widespread_fraction = float(getattr(args, "mad_widespread_fraction", 0.50))
+        self.magnitude_threshold = float(getattr(args, "mad_magnitude_threshold", 0.70))
+        if not 0 < self.isolated_fraction < self.widespread_fraction <= 1:
+            raise ValueError("meta fractions require 0 < isolated < widespread <= 1")
+        self.activations = 0
         self.medium_preferred = getattr(args, "mad_medium_defense", "trimmed_mean")
+        if self.v2 and self.medium_preferred not in self.VALID_MEDIUM:
+            raise ValueError(f"medium defense must be one of {self.VALID_MEDIUM}")
         configured = getattr(
             args,
             "mad_high_order",
@@ -35,6 +44,8 @@ class RuleBasedMetaAgent:
         return ordered
 
     def select_defenses(self, round_state):
+        if self.v2:
+            return self._select_v2(round_state)
         if isinstance(round_state, dict):
             level = str(round_state["round_level"]).upper()
             max_risk = float(round_state.get("max_risk", 0.0))
@@ -69,6 +80,30 @@ class RuleBasedMetaAgent:
             return [preferred] + [name for name in self.VALID_MEDIUM if name != preferred]
         self.last_reason = "low_round_risk_with_client_alert"
         return ["clipping", "trimmed_mean", "median"]
+
+    def _select_v2(self, round_state):
+        """Only effective risks and evidence patterns, never attack names."""
+        self.activations += 1
+        level = round_state["round_level"]
+        fraction = float(round_state.get("fraction_anomalous", 0.0))
+        magnitude = float(round_state.get("excessive_magnitude_fraction", 0.0))
+        if magnitude > 0:
+            self.last_reason = "excessive_magnitude_with_behavioral_evidence"
+            return ["clipping_trimmed_mean", "clipping_median", "trimmed_mean", "median"]
+        if 0 < fraction <= self.isolated_fraction:
+            self.last_reason = "isolated_behavioral_changes"
+            return ["multi_krum", "krum", "trimmed_mean", "median"]
+        if fraction >= self.widespread_fraction:
+            self.last_reason = "widespread_behavioral_changes"
+            return ["trimmed_mean", "median", "clipping_trimmed_mean"]
+        if level == "HIGH":
+            self.last_reason = "high_round_risk"
+            return list(self.high_order or self.VALID_HIGH)
+        if level == "MEDIUM":
+            self.last_reason = "moderate_round_risk"
+            return [self.medium_preferred, "median", "clipping_trimmed_mean"]
+        self.last_reason = "validator_escalation_or_effective_client_risk"
+        return ["clipping_trimmed_mean", "trimmed_mean", "median"]
 
     def fallback_defenses(self, round_level, attempted):
         """Escalate if validation rejects every candidate at the current level."""

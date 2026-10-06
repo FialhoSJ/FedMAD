@@ -1,6 +1,9 @@
 """Candidate-model validator with a trusted-model rollback reference."""
 
 import math
+from pathlib import Path
+
+import numpy as np
 
 import torch
 import torch.nn.functional as F
@@ -14,12 +17,32 @@ class GlobalValidator:
         self.loss_tolerance = max(0.0, float(getattr(args, "mad_validation_loss_tolerance", 0.25)))
         self.accuracy_tolerance = max(0.0, float(getattr(args, "mad_validation_accuracy_tolerance", 0.10)))
         self.max_delta_norm = float(getattr(args, "mad_validation_max_delta", 50.0))
+        self.class_tolerance = float(getattr(args, "mad_validation_class_tolerance", 0.20))
+        self.class_min_examples = max(1, int(getattr(args, "mad_validation_class_min_examples", 10)))
         ordered_clients = sorted(clients, key=lambda client: getattr(client, "id", 0))
         count = self.client_limit or len(ordered_clients)
         self.validation_clients = self._representative_clients(ordered_clients, count)
         self.client_batches = {}
         self.validation_batches = []
+        data_path = getattr(args, "mad_validation_data", "")
+        v2 = getattr(args, "mad_version", "v1") == "v2"
+        if v2 and not data_path and getattr(args, "mad_validator_enabled", True) and not getattr(args, "mad_ablate_validator", False):
+            raise ValueError("V2 validator requires mad_validation_data with a separate validation NPZ")
+        if data_path:
+            path = Path(data_path)
+            with np.load(path, allow_pickle=False) as data:
+                x, y = data["x"], data["y"]
+                if len(x) != len(y) or not len(y) or not np.isfinite(x).all() or y.ndim != 1 or not np.issubdtype(y.dtype, np.integer):
+                    raise ValueError("validation NPZ requires finite x and nonempty matching integer labels y")
+                if (y < 0).any() or (y >= int(getattr(args, "num_classes", 10))).any():
+                    raise ValueError("validation labels must be valid class indices")
+                batch_size = max(1, int(getattr(args, "mad_validation_batch_size", 32)))
+                for start in range(0, len(y), batch_size):
+                    self.validation_batches.append((torch.tensor(x[start:start + batch_size], dtype=torch.float32), torch.tensor(y[start:start + batch_size], dtype=torch.long)))
+            self.validation_clients = []
         for client in self.validation_clients:
+            if v2:
+                break
             batches = self.capture_batches(client)
             self.client_batches[client.id] = batches
             if batches:
@@ -65,6 +88,8 @@ class GlobalValidator:
         total_loss = 0.0
         correct = 0
         examples = 0
+        class_counts = {}
+        class_correct = {}
         try:
             with torch.no_grad():
                 for x, y in batches:
@@ -74,6 +99,11 @@ class GlobalValidator:
                     loss = F.cross_entropy(output, y, reduction="sum")
                     total_loss += float(loss.item())
                     correct += int((output.argmax(dim=1) == y).sum().item())
+                    predictions = output.argmax(dim=1)
+                    for label in y.unique().tolist():
+                        mask = y == label
+                        class_counts[label] = class_counts.get(label, 0) + int(mask.sum())
+                        class_correct[label] = class_correct.get(label, 0) + int(((predictions == y) & mask).sum())
                     examples += int(y.shape[0])
         finally:
             model.train(was_training)
@@ -84,6 +114,8 @@ class GlobalValidator:
             "loss": total_loss / examples,
             "accuracy": correct / examples,
             "examples": examples,
+            "class_accuracy": {str(label): class_correct[label] / count for label, count in class_counts.items()},
+            "class_examples": {str(label): count for label, count in class_counts.items()},
         }
 
     def loss_impact(self, candidate, reference, batches):
@@ -150,6 +182,10 @@ class GlobalValidator:
                 return False, "validation_loss_regression", metrics
             if metrics["accuracy"] < accuracy_floor:
                 return False, "validation_accuracy_regression", metrics
+            for label, accuracy in metrics.get("class_accuracy", {}).items():
+                if metrics["class_examples"][label] >= self.class_min_examples and label in baseline.get("class_accuracy", {}):
+                    if accuracy < baseline["class_accuracy"][label] - self.class_tolerance:
+                        return False, f"validation_class_regression:{label}", metrics
         return True, "accepted", metrics
 
     def commit(self, metrics):
@@ -159,4 +195,6 @@ class GlobalValidator:
                 "loss": float(metrics["loss"]),
                 "accuracy": float(metrics["accuracy"]),
                 "examples": int(metrics.get("examples", 0)),
+                "class_accuracy": dict(metrics.get("class_accuracy", {})),
+                "class_examples": dict(metrics.get("class_examples", {})),
             }

@@ -1,0 +1,11 @@
+{
+  "base_config": "v2_base.json", "output": "fedmad_v2_attack_smoke",
+  "seeds": [1], "clients": 5, "max_examples": 1000,
+  "distributions": [0.1], "rounds": 8, "attack_start_round": 4,
+  "attacks": ["gaussian", "sign_flipping", "scaling",
+              {"type": "label", "source_label": 0, "target_label": 1}, "model_replacement"],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "population_only_no_history", "algorithm": "MAD", "ablation": "history"}
+  ]
+}

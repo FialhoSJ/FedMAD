@@ -7,10 +7,14 @@ from collections import Counter
 import torch
 import csv
 import os
+import json
+from flcore.madsystem.evaluation import ExperimentEvaluator
+from flcore.madsystem.resources import process_memory
 class FedAvg(Server):
     def __init__(self, args, times):
         super().__init__(args, times)
         self.fpr_frr_results = []
+        self.v2 = getattr(args, "mad_version", "v1") == "v2"
 
         # Open the CSV file in append mode to save results over time
         if self.cc ==3:
@@ -19,20 +23,31 @@ class FedAvg(Server):
             self.csv_filename = 'fpr_frr_results_2.csv'
         else:
             self.csv_filename = 'f.csv'
+        if self.v2:
+            result_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "..", "results"))
+            os.makedirs(result_dir, exist_ok=True)
+            suffix = getattr(args, "mad_run_id", "")
+            self.v2_log_path = os.path.join(result_dir, f"detection_log_{self.dataset}_{self.algorithm}_cc{self.cc}_{suffix}.json")
+            self.csv_filename = self.v2_log_path.replace('.json', '_rates.csv')
+            with open(self.v2_log_path + 'l', 'w', encoding='utf-8'):
+                pass
         # Write headers if the file is empty (first time writing)
-        if not os.path.exists(self.csv_filename):
+        if self.v2 or not os.path.exists(self.csv_filename):
             with open(self.csv_filename, mode='w', newline='') as file:
                 writer = csv.writer(file)
                 writer.writerow(['Round', 'FPR', 'FRR'])
         # select slow clients
         self.set_slow_clients()
         self.set_clients(clientAVG)
+        if self.v2:
+            self.evaluator = ExperimentEvaluator(self.index_malicious)
+            self.detection_log = []
 
         print(f"\nJoin ratio / total clients: {self.join_ratio} / {self.num_clients}")
         print("Finished creating server and clients.")
 
         # self.load_model()
-        
+
     def save_fpr_frr_to_csv(self, round_number, FPR, FRR):
         """
         Saves the FPR and FRR results to a CSV file for each round.
@@ -132,7 +147,7 @@ class FedAvg(Server):
         return FPR, FRR
 
     def train(self):
-        
+
         for i in range(self.global_rounds+1):
             s_t = time.time()
             self.selected_clients = self.select_clients()
@@ -142,23 +157,35 @@ class FedAvg(Server):
             if i%self.eval_gap == 0:
                 print(f"\n-------------Round number: {i}-------------")
                 print("\nEvaluate global model")
-                self.evaluate()
+                if not self.v2:
+                    self.evaluate()
             for j in range(self.num_clients):
                 self.decrease_quarentine(j)
 
             #for client in self.selected_clients:
             #    client.train()
 
-            threads = [Thread(target=client.train)
-                       for client in self.selected_clients]
-            [t.start() for t in threads]
-            [t.join() for t in threads]
+            if self.v2 and getattr(self.args, 'mad_deterministic', False):
+                for client in self.selected_clients:
+                    torch.manual_seed(self.args.seed * 1000003 + i * 100003 + client.id * 1009)
+                    client.train()
+            else:
+                threads = [Thread(target=client.train)
+                           for client in self.selected_clients]
+                [t.start() for t in threads]
+                [t.join() for t in threads]
 
-            self.receive_models()
-            if i>0:
+            if self.selected_clients:
+                self.receive_models()
+            elif self.v2:
+                self.uploaded_ids, self.uploaded_models, self.uploaded_weights = [], [], []
+            else:
+                self.receive_models()
+            observed_ids = list(self.uploaded_ids)
+            if i>0 and (not self.v2 or len(self.uploaded_models) >= 2):
                 #comparar com o modelo
                 if self.cc==0:
-                    global_model_params = list(self.global_model.parameters()) 
+                    global_model_params = list(self.global_model.parameters())
                 # Calcular a similaridade de cosseno entre os modelos dos clientes e o modelo global
                     similarities = self.calculate_similarity_with_global_model(global_model_params)
                     for sim in similarities:
@@ -225,7 +252,7 @@ class FedAvg(Server):
                             client_id, score = client_tuples[idx]
                             print(f"Esse  {client_id} with score {score:.4f} ")
                             if score < mean_score:
-                                if client_id in self.index_malicious:
+                                if not self.v2 and client_id in self.index_malicious:
                                     a = a+1
                                 print(f"Removing client {client_id} with score {score:.4f} (below average)")
                                 self.set_client_quarantine(client_id)
@@ -234,13 +261,14 @@ class FedAvg(Server):
                                 del self.ids[idx]
                                 del self.uploaded_ids[idx]
                                 del self.uploaded_weights[idx]
-                    a = (a/total) *100
-                    print("porcentagem de clientes maliciosos de verdade achados: "+ str(a) + "%")
+                    if not self.v2:
+                        a = (a/total) *100 if total else 0.0
+                        print("porcentagem de clientes maliciosos de verdade achados: "+ str(a) + "%")
                     self.uploaded_weights = [weight / sum(self.uploaded_weights) for weight in self.uploaded_weights]
                     bye = time.time()
                     vish = bye - oi  # Calcula o tempo decorrido
                     print(f"Tempo de execução: {vish:.4f} segundos")
-                
+
                 if self.cc ==4:
                     oi = time.time()
                     k = 3
@@ -250,10 +278,10 @@ class FedAvg(Server):
                     std_entropy = np.std(entropies)
                     lower_bound = mean_entropy - std_entropy
                     upper_bound = mean_entropy + std_entropy-(std_entropy/2)
-                    
+
                     print(f"Mean entropy: {mean_entropy:.4f}, Std: {std_entropy:.4f}")
                     print(f"Keeping clients with entropy in [{lower_bound:.4f}, {upper_bound:.4f}]")
-                    
+
                     # 3. Lista de tuplas para manter índice
                     client_tuples = [(self.ids[idx], client_entropies[self.ids[idx]]) for idx in range(len(self.ids))]
 
@@ -277,15 +305,36 @@ class FedAvg(Server):
             print(self.client_quarantine_dict)
             FPR=0
             FRR = 0
-            if self.cc ==2:
+            if not self.v2 and self.cc ==2:
                 FPR, FRR = self.compute_fpr_frr_cluster(self.removed_clients, self.cluster_tuples)
-            if self.cc ==3:
+            if not self.v2 and self.cc ==3:
                 FPR, FRR = self.compute_fpr_frr()
             print(f"Round {i}: False Positive Rate = {FPR:.4f}, False Rejection Rate = {FRR:.4f}")
-            self.save_fpr_frr_to_csv(i, FPR, FRR)
+            if not self.v2:
+                self.save_fpr_frr_to_csv(i, FPR, FRR)
             if self.dlg_eval and i%self.dlg_gap == 0:
                 self.call_dlg(i)
-            self.aggregate_parameters()
+            if self.uploaded_models or not self.v2:
+                self.aggregate_parameters()
+
+            if self.v2:
+                evaluated = i % max(1, int(getattr(self.args, 'mad_evaluation_every', 1))) == 0 or i == self.global_rounds
+                if evaluated:
+                    self.evaluate()
+                retained = set(self.uploaded_ids)
+                predictions = [cid not in retained or self.client_quarantine_dict[cid]['roundsQuarent'] > 0 for cid in observed_ids]
+                activated = bool(i > 0 and self.cc != 5 and observed_ids)
+                row = {'round': i, 'mad_version': 'v2', 'client_ids': observed_ids,
+                       'planned_client_ids': getattr(self, 'planned_client_ids', observed_ids),
+                       'chosen_defense': 'monza' if self.cc == 3 else 'fedavg',
+                       'robust_defense_activated': activated, 'monitoring_seconds': 0.0,
+                       'global_metrics': self.latest_global_metrics if evaluated else None,
+                       'round_seconds': time.time() - s_t, **process_memory()}
+                row.update(self.evaluator.record_server_round(i, observed_ids, predictions, self.clients, activated))
+                self.save_fpr_frr_to_csv(i, row['detection']['fpr'], row['detection']['fnr'])
+                self.detection_log.append(row)
+                with open(self.v2_log_path + 'l', 'a', encoding='utf-8') as stream:
+                    stream.write(json.dumps(row) + '\n')
 
             self.Budget.append(time.time() - s_t)
             print('-'*25, 'time cost', '-'*25, self.Budget[-1])
@@ -302,6 +351,15 @@ class FedAvg(Server):
 
         self.save_results()
         self.save_global_model()
+        if self.v2:
+            with open(self.v2_log_path, 'w', encoding='utf-8') as stream:
+                json.dump(self.detection_log, stream, indent=2)
+            summary = self.evaluator.summary()
+            summary.update({key: sum(row['detection'][key] for row in self.detection_log) for key in ('tp', 'fp', 'tn', 'fn')})
+            summary.update(process_memory())
+            summary['round_seconds'] = sum(self.Budget)
+            with open(self.v2_log_path.replace('detection_log_', 'evaluation_'), 'w', encoding='utf-8') as stream:
+                json.dump(summary, stream, indent=2)
 
         if self.num_new_clients > 0:
             self.eval_new_clients = True

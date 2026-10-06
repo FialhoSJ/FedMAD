@@ -378,6 +378,10 @@ def run(args):
         else:
             raise NotImplementedError
 
+        if getattr(args, "mad_version", "v1") == "v2":
+            from types import MethodType
+            from flcore.madsystem.evaluation import evaluate_global
+            server.evaluate = MethodType(evaluate_global, server)
         server.train()
         if getattr(args, "mad_run_id", ""):
             # Every matrix method receives the same post-update evaluation.
@@ -385,12 +389,15 @@ def run(args):
             safe_run_id = re.sub(r"[^A-Za-z0-9_-]", "_", args.mad_run_id)[:80]
             final_path = os.path.join("..", "results", f"final_eval_{safe_run_id}.json")
             with open(final_path, "w", encoding="utf-8") as output:
-                json.dump({
+                final_record = {
                     "run_id": safe_run_id,
                     "accuracy": float(server.rs_test_acc[-1]),
                     "train_loss": float(server.rs_train_loss[-1]),
                     "evaluation": "after_last_aggregation",
-                }, output, indent=2)
+                }
+                if getattr(args, "mad_version", "v1") == "v2":
+                    final_record.update(server.latest_global_metrics)
+                json.dump(final_record, output, indent=2)
 
         time_list.append(time.time()-start)
 
@@ -535,7 +542,7 @@ if __name__ == "__main__":
     parser.add_argument('--attack_noise_snr', type=float, default=1.0,
                         help="Linear SNR for gaussian attack")
     parser.add_argument('-ria', '--round_init_atk', type = int, default=0)
-    parser.add_argument('-rfake', '--rate_client_fake', type = int, default=1) # de 0 a 1
+    parser.add_argument('-rfake', '--rate_client_fake', type = float, default=1) # de 0 a 1
     parser.add_argument('-cc', '--cluster_comparation', type = int, default=0) # 0 score com modelo global, 1 score com comparação entre clientes, 2 comparação entre clientes e remove todo o cluster , 3 comparação entre clientes com pontuação, 4 entropia do modelo 5 sem nada
     parser.add_argument('-ssl_ep', '--ssl_epochs', type=int, default=0)
     parser.add_argument('-ssl_pd', '--ssl_proj_dim', type=int, default=128)
@@ -616,18 +623,56 @@ if __name__ == "__main__":
                         help="Allowed absolute accuracy drop against the last trusted model")
     parser.add_argument('-mad_validation_max_delta', type=float, default=50.0,
                         help="Maximum L2 distance from the last trusted model")
+    # V2 is explicit so existing experiment configs retain their original policy.
+    parser.add_argument('--mad_version', choices=['v1', 'v2'], default='v1')
+    parser.add_argument('--mad_anomaly_weights', type=json.loads, default=None)
+    parser.add_argument('--mad_risk_weights', type=json.loads, default=None)
+    parser.add_argument('--mad_round_risk_weights', type=json.loads, default=None)
+    parser.add_argument('--mad_population_floor', type=float, default=0.15)
+    parser.add_argument('--mad_cold_start_factor', type=float, default=0.5)
+    parser.add_argument('--mad_history_min_observations', type=int, default=3)
+    parser.add_argument('--mad_history_sensitivity', type=float, default=3.0)
+    parser.add_argument('--mad_reputation_initial', type=float, default=1.0)
+    parser.add_argument('--mad_suspicious_profile_weight', type=float, default=0.1)
+    parser.add_argument('--mad_persistence_window', type=int, default=5)
+    parser.add_argument('--mad_watch_threshold', type=float, default=0.30)
+    parser.add_argument('--mad_suspicious_threshold', type=float, default=0.60)
+    parser.add_argument('--mad_defense_threshold', type=float, default=0.80)
+    parser.add_argument('--mad_state_recovery_threshold', type=float, default=0.45)
+    parser.add_argument('--mad_history_threshold', type=float, default=0.25)
+    parser.add_argument('--mad_isolated_fraction', type=float, default=0.25)
+    parser.add_argument('--mad_widespread_fraction', type=float, default=0.50)
+    parser.add_argument('--mad_magnitude_threshold', type=float, default=0.70)
+    parser.add_argument('--mad_quarantine_rounds', type=int, default=0)
+    parser.add_argument('--mad_validator_enabled', type=lambda x: str(x).lower() in ('true', '1', 'yes'), default=True)
+    parser.add_argument('--mad_validation_data', type=str, default='')
+    parser.add_argument('--mad_validation_batch_size', type=int, default=32)
+    parser.add_argument('--mad_validation_class_tolerance', type=float, default=0.20)
+    parser.add_argument('--mad_validation_class_min_examples', type=int, default=10)
+    parser.add_argument('--mad_evaluation_batch_size', type=int, default=32)
+    parser.add_argument('--mad_evaluation_every', type=int, default=1)
+    parser.add_argument('--mad_data_distribution', type=json.loads, default=None)
+    parser.add_argument('--mad_deterministic', action='store_true')
+    parser.add_argument('--mad_ablate_population', action='store_true')
+    parser.add_argument('--attack_source_label', type=int, default=None)
+    parser.add_argument('--attack_target_label', type=int, default=None)
     preliminary, _ = parser.parse_known_args()
     if preliminary.config:
-        with open(preliminary.config, encoding="utf-8") as config_file:
-            config_values = json.load(config_file)
-        if not isinstance(config_values, dict):
-            parser.error("config must be a JSON object")
+        from flcore.madsystem.config import load_experiment_config
+        try:
+            config_values = load_experiment_config(preliminary.config)
+        except (ValueError, OSError) as error:
+            parser.error(str(error))
         allowed = {action.dest for action in parser._actions}
         unknown = set(config_values) - allowed
         if unknown:
             parser.error("unknown config keys: " + ", ".join(sorted(unknown)))
         parser.set_defaults(**config_values)
     args = parser.parse_args()
+
+    if args.mad_deterministic:
+        torch.set_num_threads(1)
+        torch.use_deterministic_algorithms(True)
 
     random.seed(args.seed)
     np.random.seed(args.seed)

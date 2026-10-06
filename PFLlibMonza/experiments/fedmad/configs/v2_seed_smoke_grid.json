@@ -1,0 +1,7 @@
+{
+  "base_config": "v2_base.json", "output": "fedmad_v2_seed_smoke",
+  "seeds": [1, 2, 3, 4, 5], "clients": 5, "max_examples": 1000,
+  "distributions": [0.1], "rounds": 6, "attack_start_round": 4,
+  "attacks": ["sign_flipping"],
+  "methods": [{"name": "fedmad_full", "algorithm": "MAD"}]
+}

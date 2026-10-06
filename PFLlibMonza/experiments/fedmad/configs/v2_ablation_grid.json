@@ -1,0 +1,14 @@
+{
+  "base_config": "v2_base.json", "output": "fedmad_v2_ablation",
+  "seeds": [1, 2, 3, 4, 5], "distributions": ["iid", 0.1], "rounds": 150,
+  "attacks": ["sign_flipping", "gaussian"],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "population_only_no_history", "algorithm": "MAD", "ablation": "history"},
+    {"name": "no_reputation", "algorithm": "MAD", "ablation": "reputation"},
+    {"name": "no_population", "algorithm": "MAD", "ablation": "population"},
+    {"name": "no_historical_deviation", "algorithm": "MAD", "ablation": "historical_deviation"},
+    {"name": "no_meta", "algorithm": "MAD", "ablation": "meta", "fixed_defense": "trimmed_mean"},
+    {"name": "no_validator", "algorithm": "MAD", "ablation": "validator"}
+  ]
+}

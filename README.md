@@ -1,10 +1,28 @@
-# FedMAD — Adaptive Multi-Agent Defense for Federated Learning
+# FedMAD — Continuous Auditing + History-Aware Risk Assessment + Adaptive Defense Selection
 
-FedMAD is an experimental framework for defending federated learning against model poisoning. Its current redesign has two active agents: a Sentinel that audits every round and a rule-based Meta-Agent that chooses defenses. Compact memory, reputation, risk assessment, aggregation, and validation are deterministic modules. The design and migration record are in [docs/FEDMAD_REDESIGN.md](docs/FEDMAD_REDESIGN.md).
+FedMAD investigates how to distinguish legitimate Non-IID heterogeneity from suspicious changes relative to a client's own history. V2 has exactly two agents: **FedMAD Sentinel**, which audits every round, and **FedMAD Meta-Defense**, which selects defenses when observable evidence or validation requires escalation. Memory, reputation, risk, states, aggregation, validation and experimental evaluation are deterministic modules. The scientific definition, file-by-file plan and migration record are in [docs/FEDMAD_REDESIGN_V2.md](docs/FEDMAD_REDESIGN_V2.md).
+
+V2 is opt-in (`mad_version: "v2"`). Existing configurations retain V1 by default; previous results remain V1. The [earlier redesign](docs/FEDMAD_REDESIGN.md) documents that legacy path.
+
+## Run V2
+
+From the workspace root, with MNIST already prepared locally and the PFLlib dependencies installed:
+
+```bash
+python PFLlibMonza/experiments/fedmad/run_v2.py PFLlibMonza/experiments/fedmad/configs/v2_smoke_grid.json --resume
+python PFLlibMonza/experiments/fedmad/analyze_results.py PFLlibMonza/results/fedmad_v2_smoke/manifest.jsonl
+python PFLlibMonza/experiments/fedmad/plot_results.py PFLlibMonza/results/fedmad_v2_smoke/manifest.jsonl
+```
+
+This runs six updates with FedMAD, fixed Krum, undefended FedAvg and MONZA. A second smoke grid (`v2_attack_smoke_grid.json`) checks all five attack options on Dirichlet α=0.1, comparing full FedMAD with population-only detection. These are integration checks, not evidence of scientific superiority.
+
+The [experiment guide](PFLlibMonza/experiments/fedmad/README.md) explains JSON configuration, separate validation data, exact round counts, five-seed matrices, ablations, frozen parameters for unseen attacks, metrics and plots. Long grids declare 150 updates per run and are inspected with `--dry-run` before execution. Outputs include code snapshots and hashes, effective configs, per-round JSON/CSV, client states, confusion counts, censored detection latency, global accuracy, targeted ASR, time and process peak memory.
 
 The implementation lives in PFLlibMonza (PFLlibMonza/README.md) and extends PFLlib.
 
 ## Adaptive round loop
+
+The following section describes legacy V1 commands and behavior. In V2, population anomalies are discounted when mature individual history is consistent; the reversible states are NORMAL/WATCH/SUSPICIOUS/DEFENSE. An isolated behavioral change prefers Multi-Krum, widespread changes prefer Trimmed Mean, and excessive magnitude prefers global clipping plus robust aggregation. Low effective risk bypasses Meta-Defense and uses FedAvg. V2 validation uses a separate NPZ and never falls back silently to test data.
 
 1. Clients train locally and upload model updates.
 2. The **FedMAD Sentinel** extracts magnitude, direction, population distance, and temporal deviation from client updates, then produces an anomaly score.
@@ -67,6 +85,6 @@ In adaptive MAD mode, the per-round log records four Sentinel signals, raw anoma
 
 ## Validation data
 
-The current simulator builds a fixed validation subset from the first configured clients' held-out test batches. This enables candidate-model acceptance and rollback in experiments. A deployment or privacy-preserving study should replace this simulator validation source with a separately governed public or server-side validation set.
+V1 builds a fixed validation subset from clients' held-out test batches. V2 requires a separate validation NPZ (`x`, `y`); the V2 runner creates a disjoint validation/train/test split without changing the source dataset. Ground truth is consumed by `ExperimentEvaluator` after defense decisions, and is not an input to Sentinel, Risk Engine or Meta-Defense.
 
 The initial meta-agent is deterministic and rule-based. The prior SLM score combiner remains in the codebase for comparison, but it does not control adaptive defense selection.

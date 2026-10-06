@@ -245,9 +245,36 @@ class FoolsGoldDefense(DefenseStrategy):
         )
 
 
-def build_defenses():
+class GlobalClippingDefense(DefenseStrategy):
+    """Clip each complete update once before a chosen deterministic reducer."""
+
+    def __init__(self, reducer="fedavg"):
+        self.reducer = reducer
+
+    def aggregate(self, server_model, client_models, weights, client_ids,
+                  risk_scores=None, clip_norm=1.0, byzantine_f=1, **kwargs):
+        if not client_models:
+            return copy.deepcopy(server_model)
+        _, vectors = _updates(client_models, server_model)
+        factors = (float(clip_norm) / (torch.linalg.vector_norm(vectors, dim=1) + 1e-12)).clamp(max=1.0)
+        count = len(client_models)
+        trim = min(max(0, int(byzantine_f)), (count - 1) // 2)
+
+        def reduce(updates):
+            clipped = updates * factors.to(updates.device).view(-1, *([1] * (updates.ndim - 1)))
+            if self.reducer == "median":
+                return clipped.median(dim=0).values
+            if self.reducer == "trimmed_mean":
+                ordered = clipped.sort(dim=0).values
+                return (ordered[trim:count - trim] if trim else ordered).mean(dim=0)
+            return _weighted_coordinate_mean(clipped, weights)
+
+        return self._apply_update(server_model, client_models, reduce)
+
+
+def build_defenses(version="v1"):
     """Create fresh defense strategies for one server run."""
-    return {
+    pool = {
         "fedavg": FedAvgDefense(),
         "median": CoordinateMedianDefense(),
         "trimmed_mean": TrimmedMeanDefense(),
@@ -257,3 +284,8 @@ def build_defenses():
         "bulyan": BulyanDefense(),
         "foolsgold": FoolsGoldDefense(),
     }
+    if version == "v2":
+        pool["clipping"] = GlobalClippingDefense()
+        pool["clipping_trimmed_mean"] = GlobalClippingDefense("trimmed_mean")
+        pool["clipping_median"] = GlobalClippingDefense("median")
+    return pool

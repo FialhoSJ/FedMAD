@@ -1,0 +1,42 @@
+{
+  "mad_version": "v2",
+  "dataset": "MNIST",
+  "model": "CNN",
+  "num_classes": 10,
+  "clients": 20,
+  "rounds": 150,
+  "malicious_fraction": 0.2,
+  "device": "cpu",
+  "times": 1,
+  "local_epochs": 1,
+  "batch_size": 10,
+  "local_learning_rate": 0.01,
+  "join_ratio": 1.0,
+  "ssl_epochs": 0,
+  "mad_deterministic": true,
+  "mad_byzantine_f": 1,
+  "mad_clip_norm": 1.0,
+  "attack": {"type": "sign_flipping", "start_round": 30, "rate": 1.0, "scale": 10.0, "noise_snr": 1.0},
+  "sentinel": {
+    "enabled": true, "history_alpha": 0.9, "history_min_observations": 3,
+    "population_floor": 0.15, "cold_start_factor": 0.5, "history_sensitivity": 3.0,
+    "weights": {"population": 0.30, "history": 0.35, "norm": 0.20, "cosine": 0.15}
+  },
+  "reputation": {"initial": 1.0, "penalty": 0.08, "recovery": 0.02, "suspicious_profile_weight": 0.1},
+  "risk": {
+    "watch_threshold": 0.30, "suspicious_threshold": 0.60, "defense_threshold": 0.80,
+    "recovery_threshold": 0.45, "window": 5, "patience": 2,
+    "anomaly_threshold": 0.45, "history_threshold": 0.25,
+    "low_threshold": 0.35, "high_threshold": 0.65,
+    "weights": {"anomaly": 0.35, "history": 0.35, "reputation": 0.15, "persistence": 0.15},
+    "round_weights": {"mean": 0.30, "max": 0.35, "fraction": 0.20, "variance": 0.15}
+  },
+  "meta_defense": {"policy": "rule_based", "isolated_fraction": 0.25, "widespread_fraction": 0.50,
+                   "magnitude_threshold": 0.70, "medium_defense": "trimmed_mean", "max_attempts": 4,
+                   "filter_medium_risk_updates": true, "quarantine_rounds": 0},
+  "validator": {"enabled": true, "batch_size": 32, "loss_tolerance": 0.25,
+                "accuracy_tolerance": 0.10, "class_accuracy_tolerance": 0.20, "class_min_examples": 10,
+                "max_delta_norm": 50.0},
+  "evaluation": {"batch_size": 32, "every": 1},
+  "seed": 1
+}

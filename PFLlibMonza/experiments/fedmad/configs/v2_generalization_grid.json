@@ -1,0 +1,17 @@
+{
+  "base_config": "v2_base.json", "output": "fedmad_v2_generalization",
+  "seeds": [1, 2, 3, 4, 5], "distributions": [0.5, 0.1], "rounds": 150,
+  "attacks": [
+    {"type": "gaussian", "phase": "calibration"},
+    {"type": "sign_flipping", "phase": "calibration"},
+    {"type": "scaling", "phase": "unseen_test"},
+    {"type": "model_replacement", "phase": "proxy_test"},
+    {"type": "label", "source_label": 0, "target_label": 1, "phase": "unseen_test"}
+  ],
+  "methods": [
+    {"name": "fedmad_full", "algorithm": "MAD"},
+    {"name": "population_only_no_history", "algorithm": "MAD", "ablation": "history"},
+    {"name": "fixed_trimmed_mean", "algorithm": "MADStatic", "fixed_defense": "trimmed_mean"},
+    {"name": "fedavg", "algorithm": "FedAvg"}
+  ]
+}
